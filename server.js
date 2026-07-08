@@ -1,3 +1,4 @@
+require('dotenv').config({ path: require('path').resolve(__dirname, '.env'), override: true });
 const express = require('express');
 const axios   = require('axios');
 const path    = require('path');
@@ -8,6 +9,30 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
+
+app.get('/api/diag', async (req, res) => {
+  const openaiKey = process.env.OPENAI_API_KEY || '';
+  const serperKey = process.env.SERPER_API_KEY || '';
+  
+  const diag = {
+    dotenvLoaded: !!openaiKey,
+    openaiKeyLength: openaiKey.length,
+    openaiKeySnippet: openaiKey ? (openaiKey.substring(0, 10) + '...' + openaiKey.substring(openaiKey.length - 4)) : 'none',
+    serperKeyLength: serperKey.length,
+    openaiTest: 'not_run'
+  };
+
+  if (openaiKey) {
+    try {
+      await callOpenAI(openaiKey, [{ role: 'user', content: 'hello' }], 'gpt-4o-mini', 1);
+      diag.openaiTest = 'SUCCESS';
+    } catch (e) {
+      diag.openaiTest = `FAILED: ${e.message}`;
+    }
+  }
+
+  res.json(diag);
+});
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
@@ -30,13 +55,28 @@ async function get(url, params = {}, timeoutMs = 60000, extraHeaders = {}, retri
   }
 }
 
-async function tryPubchem(urlPath, params = {}) {
-  try { return await get(`https://pubchem.ncbi.nlm.nih.gov${urlPath}`, params, 7000); }
-  catch { return null; }
+async function tryPubchem(urlPath, params = {}, timeoutMs = 15000) {
+  try {
+    return await get(`https://pubchem.ncbi.nlm.nih.gov${urlPath}`, params, timeoutMs);
+  } catch (err) {
+    console.error(`PubChem API error (${urlPath}):`, err.message);
+    return null;
+  }
 }
 
-function extractPubchemValues(data) {
-  if (!data) return [];
+function findSection(arr, heading) {
+  for (const item of arr || []) {
+    if (item.TOCHeading === heading) return item;
+    if (item.Section) {
+      const found = findSection(item.Section, heading);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function extractPubchemValues(section) {
+  if (!section) return [];
   const vals = [];
   const dig = (arr) => {
     for (const item of arr || []) {
@@ -49,20 +89,12 @@ function extractPubchemValues(data) {
       if (item.Section) dig(item.Section);
     }
   };
-  try { dig(data.Record?.Section || []); } catch {}
+  if (section.Information) {
+    dig([section]);
+  } else if (section.Section) {
+    dig(section.Section);
+  }
   return vals.slice(0, 5);
-}
-
-// Lấy dữ liệu thực nghiệm từ PubChem theo từng heading, trả về {value, sourceUrl}[]
-async function fetchPubchemSection(cid, heading) {
-  const data = await tryPubchem(
-    `/rest/pug_view/data/compound/${cid}/JSON`,
-    { heading }
-  );
-  const vals = extractPubchemValues(data);
-  if (!vals.length) return [];
-  const sourceUrl = `https://pubchem.ncbi.nlm.nih.gov/compound/${cid}#section=${heading.replace(/\s+/g, '-')}`;
-  return vals.map((v) => ({ value: v, sourceUrl, sourceName: 'PubChem' }));
 }
 
 async function fetchPubchemExperimental(drugName) {
@@ -72,8 +104,13 @@ async function fetchPubchemExperimental(drugName) {
   if (!cid) return { cid: null, data: {} };
 
   const compoundUrl = `https://pubchem.ncbi.nlm.nih.gov/compound/${cid}`;
+  
+  // Tải toàn bộ record của compound chỉ bằng 1 request
+  const fullData = await tryPubchem(`/rest/pug_view/data/compound/${cid}/JSON`, {}, 20000);
+  if (!fullData || !fullData.Record || !fullData.Record.Section) {
+    return { cid, compoundUrl, data: {} };
+  }
 
-  // Fetch nhiều sections song song (timeout ngắn để không block)
   const sections = {
     meltingPoint:   'Melting Point',
     boilingPoint:   'Boiling Point',
@@ -88,15 +125,19 @@ async function fetchPubchemExperimental(drugName) {
   };
 
   const result = { cid, compoundUrl, data: {} };
-  // Fetch tất cả 10 sections song song
-  const keys = Object.keys(sections);
-  const fetches = keys.map((k) => fetchPubchemSection(cid, sections[k]).then((v) => [k, v]));
-  const resolved = await Promise.allSettled(fetches);
-  for (const r of resolved) {
-    if (r.status === 'fulfilled' && r.value[1].length) {
-      result.data[r.value[0]] = r.value[1];
+  const rootSections = fullData.Record.Section;
+
+  for (const [key, heading] of Object.entries(sections)) {
+    const sec = findSection(rootSections, heading);
+    if (sec) {
+      const vals = extractPubchemValues(sec);
+      if (vals.length) {
+        const sourceUrl = `https://pubchem.ncbi.nlm.nih.gov/compound/${cid}#section=${heading.replace(/\s+/g, '-')}`;
+        result.data[key] = vals.map((v) => ({ value: v, sourceUrl, sourceName: 'PubChem' }));
+      }
     }
   }
+
   return result;
 }
 
@@ -370,7 +411,9 @@ app.post('/api/properties', async (req, res) => {
 // ── Route: AI Analysis – dữ liệu xác minh + trích dẫn nghiêm ngặt ─────────────
 
 app.post('/api/ai-analysis', async (req, res) => {
-  const { drugName, drugData, openaiKey, serperKey } = req.body;
+  const { drugName, drugData } = req.body;
+  const openaiKey = req.body.openaiKey || process.env.OPENAI_API_KEY;
+  const serperKey = req.body.serperKey || process.env.SERPER_API_KEY;
   if (!openaiKey) return res.status(400).json({ error: 'Thiếu OpenAI API key' });
 
   try {
@@ -437,9 +480,9 @@ app.post('/api/ai-analysis', async (req, res) => {
         content: `Bạn là dược sĩ chuyên gia phân tích dược chất. 
 
 QUY TẮC NGHIÊM NGẶT:
-1. ĐỐI VỚI CÁC THÔNG SỐ VẬT LÝ (Nhiệt độ nóng chảy, pKa, Phân tử lượng, LogP, TPSA): TUYỆT ĐỐI CHỈ SỬ DỤNG DỮ LIỆU ĐƯỢC CUNG CẤP TRONG MỤC [V1..Vn]. Giữ nguyên chính xác giá trị số (không làm tròn, không tự biên tập lại khoảng nhiệt độ). NẾU KHÔNG CÓ TRONG [V1..Vn], HÃY GHI "Không có dữ liệu". KHÔNG dùng kiến thức nội bộ.
-2. Mỗi thông tin PHẢI kèm URL nguồn cụ thể trong trường "sourceUrl" (lấy URL tương ứng với thông tin đó từ [V1..Vn]).
-3. Đối với các dữ liệu bổ sung (như cơ chế, BCS): Ưu tiên lấy từ DỮ LIỆU BỔ SUNG TỪ DRUGBANK và ĐIỀN CHÍNH XÁC đường link nguồn. TUYỆT ĐỐI KHÔNG ĐỂ sourceUrl LÀ null.
+1. ĐỐI VỚI CÁC THÔNG SỐ VẬT LÝ (Nhiệt độ nóng chảy, pKa, Phân tử lượng, LogP, TPSA): Ưu tiên tuyệt đối dữ liệu thực tế từ [V1..Vn]. Chỉ khi KHÔNG CÓ dữ liệu trong [V1..Vn], bạn mới được phép sử dụng kiến thức nội bộ của mình để cung cấp giá trị dự đoán, nhưng phải ghi chú rõ là "(Dự đoán bởi AI)" ngay sau giá trị (Ví dụ: "75-77 °C (Dự đoán bởi AI)" hoặc "pKa = 4.4 (Dự đoán bởi AI)").
+2. Mỗi thông tin từ [V1..Vn] PHẢI kèm URL nguồn cụ thể trong trường "sourceUrl" (lấy URL tương ứng với thông tin đó từ [V1..Vn]). Nếu là giá trị dự đoán bởi AI, hãy điền "sourceUrl" là null.
+3. Đối với các dữ liệu bổ sung (như cơ chế, BCS): Ưu tiên lấy từ DỮ LIỆU BỔ SUNG TỪ DRUGBANK và ĐIỀN CHÍNH XÁC đường link nguồn. TUYỆT ĐỐI KHÔNG ĐỂ sourceUrl LÀ null nếu có nguồn trong DrugBank.
 4. Với polymorph: chỉ mô tả các dạng đã được công bố, ghi rõ DOI (https://doi.org/...) hoặc URL cụ thể.
 5. TUYỆT ĐỐI KHÔNG BỊA ĐẶT HOẶC SUY LUẬN. TẤT CẢ thông tin đưa ra mà có trích dẫn nguồn thì BẮT BUỘC thông tin đó phải có xuất xứ CHÍNH XÁC từ nguồn đó.
 6. Trả lời bằng tiếng Việt. JSON hợp lệ KHÔNG có markdown.`,
@@ -535,7 +578,9 @@ Trả về JSON (mỗi field có value + sourceUrl):
 
 
 app.post('/api/forced-degradation', async (req, res) => {
-  const { drugName, openaiKey, serperKey } = req.body;
+  const { drugName } = req.body;
+  const openaiKey = req.body.openaiKey || process.env.OPENAI_API_KEY;
+  const serperKey = req.body.serperKey || process.env.SERPER_API_KEY;
   if (!openaiKey) return res.status(400).json({ error: 'Thiếu OpenAI API key' });
 
   try {
@@ -576,9 +621,16 @@ app.post('/api/forced-degradation', async (req, res) => {
         const logContent = combined.map(r => r.title + ' -> ' + r.link).join('\n');
         fs.writeFileSync('serper_debug.log', `=== SERPER COMBINED RESULTS ===\n${logContent}\n`);
 
+        // Ưu tiên các liên kết chất lượng cao (NCBI, PDF, PMC) lên đầu trước khi tải
+        const score = (url) => (url.includes('ncbi.nlm.nih.gov') ? 3 : 0) + (url.includes('.pdf') ? 2 : 0) + (url.includes('aws') ? 1 : 0);
+        combined.sort((a, b) => score(b.link) - score(a.link));
+
+        // Chỉ tải nội dung của tối đa 15 liên kết chất lượng nhất
+        const targetLinks = combined.slice(0, 15);
         const chunkSize = 5;
-        for (let i = 0; i < combined.length; i += chunkSize) {
-          const chunk = combined.slice(i, i + chunkSize);
+
+        for (let i = 0; i < targetLinks.length; i += chunkSize) {
+          const chunk = targetLinks.slice(i, i + chunkSize);
           await Promise.all(chunk.map(async (r) => {
             let body = '';
             try {
@@ -735,7 +787,8 @@ Trình bày theo cấu trúc JSON:
 // ── Route: Vidal.ru Formulas (Thay thế SRA) ───────────────────────────────────────────────
 
 app.post('/api/sra-formulas', async (req, res) => {
-  const { drugName, dosageForm, openaiKey } = req.body;
+  const { drugName, dosageForm } = req.body;
+  const openaiKey = req.body.openaiKey || process.env.OPENAI_API_KEY;
   if (!drugName || !dosageForm) return res.status(400).json({ error: 'Thiếu tên hoạt chất hoặc dạng bào chế' });
   if (!openaiKey) return res.status(400).json({ error: 'Thiếu OpenAI API key' });
 
@@ -860,7 +913,9 @@ Cấu trúc JSON:
 // ── Route: Patents ────────────────────────────────────────────────────────────
 
 app.post('/api/patents', async (req, res) => {
-  const { drugName, dosageForm, openaiKey, serperKey } = req.body;
+  const { drugName, dosageForm } = req.body;
+  const openaiKey = req.body.openaiKey || process.env.OPENAI_API_KEY;
+  const serperKey = req.body.serperKey || process.env.SERPER_API_KEY;
   if (!openaiKey || !serperKey) return res.status(400).json({ error: 'Thiếu API key' });
 
   try {

@@ -150,12 +150,13 @@ async function api(endpoint, body) {
 async function startSearch() {
   const drugName  = document.getElementById('drug-name').value.trim();
   const dosageForm = document.getElementById('dosage-form').value;
-  const openaiKey = document.getElementById('openai-key').value.trim();
-  const serperKey = document.getElementById('serper-key').value.trim();
+  const openaiEl = document.getElementById('openai-key');
+  const serperEl = document.getElementById('serper-key');
+  const openaiKey = openaiEl ? openaiEl.value.trim() : '';
+  const serperKey = serperEl ? serperEl.value.trim() : '';
 
   if (!drugName) { alert('Vui lòng nhập tên hoạt chất!'); return; }
   if (!dosageForm) { alert('Vui lòng chọn Dạng bào chế!'); return; }
-  if (!openaiKey) { alert('Vui lòng nhập OpenAI API Key!'); return; }
 
   // Lưu API keys vào localStorage để không cần nhập lại
   localStorage.setItem('openai_api_key', openaiKey);
@@ -230,19 +231,14 @@ async function startSearch() {
     }
 
     // ── Step 5: Patents ─────────────────────────────────────────────────
-    if (serperKey) {
-      setStepStatus('step-patents', 'active');
-      try {
-        state.patentData = await api('/api/patents', { drugName, dosageForm, openaiKey, serperKey });
-        setStepStatus('step-patents', 'done', `${(state.patentData.patents || []).length} patent`);
-        renderPatentsTab();
-      } catch (e) {
-        setStepStatus('step-patents', 'error', e.message);
-        renderPatentsError(e.message);
-      }
-    } else {
-      setStepStatus('step-patents', 'error', 'Cần Serper.dev API key');
-      renderPatentsError('Bạn cần cung cấp Serper.dev API key ở góc trên cùng và bấm nút "Tra cứu" lại để hệ thống bắt đầu tìm kiếm patent.');
+    setStepStatus('step-patents', 'active');
+    try {
+      state.patentData = await api('/api/patents', { drugName, dosageForm, openaiKey, serperKey });
+      setStepStatus('step-patents', 'done', `${(state.patentData.patents || []).length} patent`);
+      renderPatentsTab();
+    } catch (e) {
+      setStepStatus('step-patents', 'error', e.message);
+      renderPatentsError(e.message === 'HTTP 400' ? 'Bạn cần cung cấp Serper.dev API key trong file .env hoặc điền ở góc trên cùng.' : e.message);
     }
 
   } finally {
@@ -910,20 +906,27 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ── Key Persistence & Defaults ────────────────────────────────────────────────
-const DEFAULT_OPENAI_KEY = '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';
-const DEFAULT_SERPER_KEY = 'e9146f694453f15764f0aa93a2387c6a1f81c5db';
-
 (function initKeys() {
-  const savedOpenai = localStorage.getItem('openai_api_key');
-  const savedSerper = localStorage.getItem('serper_api_key');
+  let savedOpenai = localStorage.getItem('openai_api_key') || '';
+  let savedSerper = localStorage.getItem('serper_api_key') || '';
+
+  // Dọn dẹp key cũ đã bị thu hồi khỏi localStorage của trình duyệt
+  if (savedOpenai.includes('ejKtxBzOG6t')) {
+    localStorage.removeItem('openai_api_key');
+    savedOpenai = '';
+  }
+  if (savedSerper.includes('e9146f69445')) {
+    localStorage.removeItem('serper_api_key');
+    savedSerper = '';
+  }
 
   const openaiEl = document.getElementById('openai-key');
   const serperEl = document.getElementById('serper-key');
 
   if (openaiEl) {
-    openaiEl.value = savedOpenai !== null ? savedOpenai : DEFAULT_OPENAI_KEY;
+    openaiEl.value = savedOpenai;
   }
   if (serperEl) {
-    serperEl.value = savedSerper !== null ? savedSerper : DEFAULT_SERPER_KEY;
+    serperEl.value = savedSerper;
   }
 })();
