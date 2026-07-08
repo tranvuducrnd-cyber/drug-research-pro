@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Drug Research Pro – Tra cứu nghiên cứu dược phẩm</title>
+  <meta name="description" content="Nền tảng nghiên cứu dược phẩm tích hợp AI: phân tích hoạt chất, tra cứu công thức web Nga, tìm kiếm patent thuốc gốc." />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div class="app-wrapper">
+
+  <!-- ── Header ──────────────────────────────────────────────────────── -->
+  <header class="site-header">
+    <div class="logo">
+      <div class="logo-icon">🔬</div>
+      <div class="logo-text">Drug Research <span>Pro</span></div>
+    </div>
+    <div class="header-badge">AI-Powered Platform</div>
+  </header>
+
+  <!-- ── Hero + Search ───────────────────────────────────────────────── -->
+  <section class="hero">
+    <h1 class="hero-title">Tra Cứu Nghiên Cứu Dược Phẩm</h1>
+    <p class="hero-sub">Nhập tên hoạt chất để phân tích toàn diện: cấu trúc hóa học, độ ổn định, công thức web Nga và patent thuốc gốc.</p>
+
+    <div class="search-card">
+      <div class="search-row">
+        <div class="input-group">
+          <label for="drug-name">Tên hoạt chất <span style="color:#ef4444">*</span></label>
+          <input id="drug-name" class="input-field" type="text"
+            placeholder="VD: ibuprofen, metformin, amlodipine…"
+            autocomplete="off" spellcheck="false" />
+        </div>
+        <div class="input-group">
+          <label for="dosage-form">Dạng bào chế <span style="color:#ef4444">*</span></label>
+          <select id="dosage-form" class="input-field" required style="appearance: none; background-image: url('data:image/svg+xml;utf8,<svg fill=%22%2364748b%22 height=%2224%22 viewBox=%220 0 24 24%22 width=%2224%22 xmlns=%22http://www.w3.org/2000/svg%22><path d=%22M7 10l5 5 5-5z%22/></svg>'); background-repeat: no-repeat; background-position-x: 98%; background-position-y: 50%;">
+            <option value="" disabled selected style="color: #fff; background: #0f172a;">Ví dụ: viên nén, hỗn dịch...</option>
+            <option value="Tablet" style="color: #fff; background: #0f172a;">Viên nén (Tablet)</option>
+            <option value="Effervescent tablet" style="color: #fff; background: #0f172a;">Viên sủi (Effervescent tablet)</option>
+            <option value="Capsule" style="color: #fff; background: #0f172a;">Viên nang (Capsule)</option>
+            <option value="Softgel" style="color: #fff; background: #0f172a;">Viên nang mềm (Softgel)</option>
+            <option value="Solution" style="color: #fff; background: #0f172a;">Dung dịch (Solution)</option>
+            <option value="Suspension" style="color: #fff; background: #0f172a;">Hỗn dịch (Suspension)</option>
+            <option value="Granules" style="color: #fff; background: #0f172a;">Cốm (Granules)</option>
+            <option value="Injection" style="color: #fff; background: #0f172a;">Thuốc tiêm (Injection)</option>
+            <option value="Cream/Ointment" style="color: #fff; background: #0f172a;">Kem/Mỡ (Cream/Ointment)</option>
+            <option value="Eye drops" style="color: #fff; background: #0f172a;">Thuốc nhỏ mắt (Eye drops)</option>
+          </select>
+        </div>
+        <button id="btn-search" class="btn-search" onclick="startSearch()">
+          <span>🔍</span> Tra cứu
+        </button>
+      </div>
+
+      <div class="api-keys-row">
+        <div class="input-group">
+          <label for="openai-key">OpenAI API Key <span style="color:#ef4444">*</span></label>
+          <div class="key-input-wrap">
+            <input id="openai-key" class="input-field" type="password"
+              placeholder="sk-…" autocomplete="off" />
+            <button class="toggle-key" onclick="toggleKeyVisibility('openai-key', this)" title="Hiện/Ẩn key">👁</button>
+          </div>
+        </div>
+        <div class="input-group">
+          <label for="serper-key">Serper.dev API Key</label>
+          <div class="key-input-wrap">
+            <input id="serper-key" class="input-field" type="password"
+              placeholder="Dùng cho tra cứu độ ổn định & patent"
+              autocomplete="off" />
+            <button class="toggle-key" onclick="toggleKeyVisibility('serper-key', this)" title="Hiện/Ẩn key">👁</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Main Content ─────────────────────────────────────────────────── -->
+  <main class="main-content" id="main-content">
+
+    <!-- Empty state -->
+    <div id="empty-state" class="empty-state">
+      <div class="empty-state-icon">⚗️</div>
+      <div class="empty-state-title">Nhập tên hoạt chất để bắt đầu</div>
+      <div class="empty-state-sub">Hệ thống sẽ tự động tra cứu PubChem, nghiên cứu độ ổn định, công thức web Nga và patent thuốc gốc</div>
+    </div>
+
+    <!-- Loading -->
+    <div id="loading-section" class="loading-section">
+      <div class="section-card">
+        <div class="section-header">
+          <div class="section-icon icon-blue">⏳</div>
+          <div class="section-title">Đang xử lý yêu cầu…</div>
+        </div>
+        <div class="progress-steps" id="progress-steps"></div>
+      </div>
+    </div>
+
+    <!-- Results -->
+    <div id="results-section" style="display:none">
+
+      <!-- Tabs -->
+      <div class="tabs-wrap" role="tablist">
+        <button class="tab-btn active" role="tab" onclick="switchTab('tab-drug', this)">
+          🧬 Đặc điểm hoạt chất
+        </button>
+        <button class="tab-btn" role="tab" onclick="switchTab('tab-stability', this)">
+          🛡️ Độ ổn định
+        </button>
+        <button class="tab-btn" role="tab" onclick="switchTab('tab-sra', this)">
+          🇷🇺 Công thức web Nga
+        </button>
+        <button class="tab-btn" role="tab" onclick="switchTab('tab-patents', this)">
+          📄 Patent thuốc gốc
+        </button>
+      </div>
+
+      <!-- ══ Tab 1: Drug Properties ═══════════════════════════════════ -->
+      <div id="tab-drug" class="tab-panel active">
+
+        <!-- 1.1 Chemical Structure -->
+        <div class="section-card">
+          <div class="section-header" onclick="toggleSection(this)">
+            <div class="section-icon icon-blue">⚗️</div>
+            <div class="section-title">1.1 Phân tích cấu trúc hóa học</div>
+            <button class="collapse-btn">▼</button>
+          </div>
+          <div class="section-body" id="sec-structure">
+            <div class="structure-layout-simple" style="display: flex; gap: 1.5rem; align-items: flex-start;">
+              <div class="structure-img-wrap" id="structure-img-wrap" style="width: 220px; flex-shrink: 0; background: #fff; border-radius: var(--r-md); padding: 8px; display: flex; align-items: center; justify-content: center; aspect-ratio: 1;">
+                <div class="skeleton" style="width:100%;height:200px;"></div>
+              </div>
+              <div style="flex-grow: 1;">
+                <div class="skeleton" style="height:20px;width:150px;margin-bottom:12px;"></div>
+                <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                  <div class="skeleton" style="height:26px;width:80px;border-radius:100px;"></div>
+                  <div class="skeleton" style="height:26px;width:100px;border-radius:100px;"></div>
+                  <div class="skeleton" style="height:26px;width:70px;border-radius:100px;"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 1.2 Physical Properties -->
+        <div class="section-card">
+          <div class="section-header" onclick="toggleSection(this)">
+            <div class="section-icon icon-cyan">🧪</div>
+            <div class="section-title">1.2 Tính chất vật lý</div>
+            <button class="collapse-btn">▼</button>
+          </div>
+          <div class="section-body" id="sec-physical">
+            <div class="skeleton" style="height:120px;border-radius:12px;"></div>
+          </div>
+        </div>
+
+        <!-- 1.3 Chemical Properties -->
+        <div class="section-card">
+          <div class="section-header" onclick="toggleSection(this)">
+            <div class="section-icon icon-purple">⚡</div>
+            <div class="section-title">1.3 Tính chất hóa học</div>
+            <button class="collapse-btn">▼</button>
+          </div>
+          <div class="section-body" id="sec-chemical">
+            <div class="skeleton" style="height:120px;border-radius:12px;"></div>
+          </div>
+        </div>
+
+        <!-- 1.4 Biological Properties -->
+        <div class="section-card">
+          <div class="section-header" onclick="toggleSection(this)">
+            <div class="section-icon icon-green">🌿</div>
+            <div class="section-title">1.4 Tính chất sinh học</div>
+            <button class="collapse-btn">▼</button>
+          </div>
+          <div class="section-body" id="sec-biological">
+            <div class="skeleton" style="height:100px;border-radius:12px;"></div>
+          </div>
+        </div>
+
+      </div><!-- /tab-drug -->
+
+      <!-- ══ Tab 2: Stability ══════════════════════════════════════════ -->
+      <div id="tab-stability" class="tab-panel">
+
+        <div class="section-card">
+          <div class="section-header">
+            <div class="section-icon icon-amber">🔥</div>
+            <div class="section-title">Độ ổn định trong các điều kiện phân hủy cưỡng bức</div>
+          </div>
+          <div id="sec-stability">
+            <div class="empty-state" style="padding:2rem">
+              <div class="empty-state-icon">🔍</div>
+              <div class="empty-state-sub">Chưa có dữ liệu. Serper.dev API key cần được cung cấp để tra cứu.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-card" id="stability-sources-card" style="display:none">
+          <div class="section-header" onclick="toggleSection(this)">
+            <div class="section-icon icon-blue">📚</div>
+            <div class="section-title">Nguồn tài liệu tham khảo</div>
+            <button class="collapse-btn">▼</button>
+          </div>
+          <div class="section-body" id="sec-stability-sources"></div>
+        </div>
+
+      </div><!-- /tab-stability -->
+
+      <!-- ══ Tab 3: Vidal Formulas ═══════════════════════════════════════ -->
+      <div id="tab-sra" class="tab-panel">
+
+        <div class="section-card">
+          <div class="section-header">
+            <div class="section-icon icon-green">🇷🇺</div>
+            <div class="section-title">Công thức thuốc gốc tại Vidal.ru (Nga)</div>
+            <div class="section-subtitle" id="sra-count"></div>
+          </div>
+          <div id="sec-sra-products">
+            <div class="empty-state" style="padding:2rem">
+              <div class="empty-state-icon">🇷🇺</div>
+              <div class="empty-state-sub">Dữ liệu sẽ được tra cứu và dịch từ Vidal.ru</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-card" id="sra-insights-card" style="display:none">
+          <div class="section-header" onclick="toggleSection(this)">
+            <div class="section-icon icon-purple">🤖</div>
+            <div class="section-title">Đề xuất công thức (AI)</div>
+            <button class="collapse-btn">▼</button>
+          </div>
+          <div class="section-body" id="sec-sra-insights"></div>
+        </div>
+
+      </div><!-- /tab-sra -->
+
+      <!-- ══ Tab 4: Patents ════════════════════════════════════════════ -->
+      <div id="tab-patents" class="tab-panel">
+
+        <div class="section-card">
+          <div class="section-header">
+            <div class="section-icon icon-amber">📄</div>
+            <div class="section-title">Patent thuốc gốc – Thành phần công thức</div>
+            <div class="section-subtitle" id="patent-count"></div>
+          </div>
+          <div id="sec-patents">
+            <div class="empty-state" style="padding:2rem">
+              <div class="empty-state-icon">🔎</div>
+              <div class="empty-state-sub">Vui lòng cung cấp Serper.dev API key và bấm "Tra cứu" để tìm kiếm patent</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-card" id="patent-insights-card" style="display:none">
+          <div class="section-header" onclick="toggleSection(this)">
+            <div class="section-icon icon-blue">💡</div>
+            <div class="section-title">Phân tích xu hướng patent</div>
+            <button class="collapse-btn">▼</button>
+          </div>
+          <div class="section-body" id="sec-patent-insights"></div>
+        </div>
+
+        <div class="section-card" id="patent-links-card" style="display:none">
+          <div class="section-header" onclick="toggleSection(this)">
+            <div class="section-icon icon-cyan">🔗</div>
+            <div class="section-title">Liên kết patent gốc</div>
+            <button class="collapse-btn">▼</button>
+          </div>
+          <div class="section-body" id="sec-patent-links"></div>
+        </div>
+
+      </div><!-- /tab-patents -->
+
+    </div><!-- /results-section -->
+  </main>
+
+</div><!-- /app-wrapper -->
+<script src="app.js"></script>
+</body>
+</html>
