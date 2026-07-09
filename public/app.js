@@ -16,6 +16,7 @@ const state = {
   stabilityData: null,
   sraData: null,
   patentData: null,
+  pharmaData: null,
 };
 
 // ── UI Helpers ────────────────────────────────────────────────────────────────
@@ -96,16 +97,28 @@ const STEPS = [
   { id: 'step-stability',   label: 'Phân hủy cưỡng bức (Forced Degradation)',         icon: '🔥' },
   { id: 'step-sra',         label: 'Tra cứu công thức web Nga (Vidal.ru)',            icon: '🇷🇺' },
   { id: 'step-patents',     label: 'Tìm kiếm patent Google Patents',                  icon: '📄' },
+  { id: 'step-pharma',      label: 'Tra cứu dược điển (USP / BP / EP / JP)',          icon: '📖' },
 ];
 
 function renderProgressSteps() {
   const container = document.getElementById('progress-steps');
-  container.innerHTML = STEPS.map((s) => `
-    <div class="progress-step" id="${s.id}">
-      <span class="step-icon">${s.icon}</span>
-      <span>${s.label}</span>
-    </div>
-  `).join('');
+  container.innerHTML = STEPS.map((s) => {
+    return `
+      <div class="progress-step" id="${s.id}">
+        <span class="step-icon">${s.icon}</span>
+        <div class="progress-step-content">
+          <div class="progress-step-header">
+            <span class="progress-step-title">${s.label}</span>
+            <span class="progress-step-percent" id="${s.id}-percent">0%</span>
+          </div>
+          <div class="progress-bar-container">
+            <div class="progress-bar-fill" id="${s.id}-bar" style="width: 0%"></div>
+          </div>
+          <div class="progress-detail" id="${s.id}-detail">Đang chờ...</div>
+        </div>
+      </div>
+    `;
+  }).join('');
 }
 
 function setStepStatus(id, status, extraText = '') {
@@ -113,7 +126,7 @@ function setStepStatus(id, status, extraText = '') {
   if (!el) return;
   el.classList.remove('active', 'done', 'error');
   el.classList.add(status);
-  const label = el.querySelector('span:last-child');
+  const label = el.querySelector('.progress-step-title');
   const base = STEPS.find((s) => s.id === id)?.label || '';
   if (label) label.textContent = base + (extraText ? ' — ' + extraText : '');
 
@@ -127,9 +140,79 @@ function setStepStatus(id, status, extraText = '') {
     icon.after(sp);
   } else if (status === 'done') {
     icon.textContent = '✅';
+    // set to 100% on done
+    const percentEl = document.getElementById(`${id}-percent`);
+    const barEl = document.getElementById(`${id}-bar`);
+    const detailEl = document.getElementById(`${id}-detail`);
+    if (percentEl) percentEl.textContent = '100%';
+    if (barEl) barEl.style.width = '100%';
+    if (detailEl) detailEl.textContent = 'Hoàn thành.';
   } else if (status === 'error') {
     icon.textContent = '❌';
+    const percentEl = document.getElementById(`${id}-percent`);
+    const barEl = document.getElementById(`${id}-bar`);
+    const detailEl = document.getElementById(`${id}-detail`);
+    if (percentEl) percentEl.textContent = 'Lỗi';
+    if (barEl) barEl.style.width = '100%';
+    if (detailEl) detailEl.textContent = 'Tiến trình thất bại: ' + extraText;
   }
+}
+
+let progressInterval = null;
+function startProgressPolling(searchId) {
+  if (progressInterval) clearInterval(progressInterval);
+  progressInterval = setInterval(async () => {
+    try {
+      const res = await fetch(`/api/progress?id=${searchId}`);
+      const data = await res.json();
+      
+      if (data.properties) {
+        updateStepProgressBar('step-pubchem', data.properties.percent, data.properties.message);
+      }
+      if (data.aiAnalysis) {
+        updateStepProgressBar('step-ai', data.aiAnalysis.percent, data.aiAnalysis.message);
+      }
+      if (data.stability) {
+        updateStepProgressBar('step-stability', data.stability.percent, data.stability.message);
+      }
+      if (data.vidal) {
+        updateStepProgressBar('step-sra', data.vidal.percent, data.vidal.message);
+      }
+      if (data.patents) {
+        updateStepProgressBar('step-patents', data.patents.percent, data.patents.message);
+      }
+    } catch (e) {
+      console.error('Error polling progress:', e);
+    }
+  }, 800);
+}
+
+function stopProgressPolling() {
+  if (progressInterval) {
+    clearInterval(progressInterval);
+    progressInterval = null;
+  }
+}
+
+function updateStepProgressBar(id, percent, message) {
+  // Only update if the step is currently active (to prevent overwriting done/error state)
+  const el = document.getElementById(id);
+  if (!el || !el.classList.contains('active')) return;
+
+  const percentEl = document.getElementById(`${id}-percent`);
+  const barEl = document.getElementById(`${id}-bar`);
+  const detailEl = document.getElementById(`${id}-detail`);
+  if (percentEl) percentEl.textContent = `${percent}%`;
+  if (barEl) barEl.style.width = `${percent}%`;
+  if (detailEl) detailEl.textContent = message;
+
+  // Cập nhật thanh tiến độ bên trong tab panel nếu có
+  const tabPercentEl = document.getElementById(`${id}-tab-percent`);
+  const tabBarEl = document.getElementById(`${id}-tab-bar`);
+  const tabDetailEl = document.getElementById(`${id}-tab-detail`);
+  if (tabPercentEl) tabPercentEl.textContent = `${percent}%`;
+  if (tabBarEl) tabBarEl.style.width = `${percent}%`;
+  if (tabDetailEl) tabDetailEl.textContent = message;
 }
 
 // ── API Calls ─────────────────────────────────────────────────────────────────
@@ -158,43 +241,84 @@ async function startSearch() {
   if (!drugName) { alert('Vui lòng nhập tên hoạt chất!'); return; }
   if (!dosageForm) { alert('Vui lòng chọn Dạng bào chế!'); return; }
 
+  const searchId = 'search_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+
   // Lưu API keys vào localStorage để không cần nhập lại
   localStorage.setItem('openai_api_key', openaiKey);
   localStorage.setItem('serper_api_key', serperKey);
 
-  Object.assign(state, { drugName, dosageForm, openaiKey, serperKey });
+  // Reset state từ kết quả tìm kiếm trước đó
+  Object.assign(state, { 
+    drugName, 
+    dosageForm, 
+    openaiKey, 
+    serperKey,
+    pubchemData: null,
+    aiAnalysis: null,
+    stabilityData: null,
+    sraData: null,
+    patentData: null,
+    pharmaData: null,
+  });
 
-  // Reset UI
+  // Reset UI và ẩn các card kết quả từ lượt tìm kiếm trước
   hide('empty-state');
   hide('results-section');
   show('loading-section');
   document.getElementById('loading-section').classList.add('active');
   document.getElementById('btn-search').disabled = true;
 
+  // Ẩn các card điều kiện bên trong tab
+  hide('stability-sources-card');
+  hide('sra-insights-card');
+  hide('patent-insights-card');
+  setInner('sra-count', '');
+  setInner('patent-count', '');
+
   renderProgressSteps();
+  startProgressPolling(searchId);
 
-  // Đặt trạng thái đang tải cho các tab chưa có dữ liệu
-  const loadingHtml = (msg) => `<div class="empty-state" style="padding:2rem"><div class="empty-state-icon">⏳</div><div class="empty-state-sub">${msg}</div></div>`;
-  setInner('sec-stability-sources', loadingHtml('Đang phân tích độ ổn định và lão hóa cấp tốc...'));
-  setInner('sec-sra-products', loadingHtml('Đang tìm kiếm và dịch công thức từ Vidal.ru...'));
-  setInner('sec-patents', loadingHtml('Đang phân tích patent (đợi Vidal hoàn thành)...'));
+  // Đặt trạng thái đang tải chứa thanh tiến độ động cho các tab chưa có dữ liệu
+  const tabLoadingHtml = (id, label) => `
+    <div class="empty-state" style="padding: 4rem 2rem; max-width: 450px; margin: 0 auto;">
+      <div class="empty-state-icon" style="font-size: 2.2rem; margin-bottom: 0.8rem;">⏳</div>
+      <div class="empty-state-title" style="margin-bottom: 0.5rem; font-size: 0.95rem;">${label}</div>
+      <div class="progress-bar-container" style="height: 5px; background: rgba(255,255,255,0.06); border-radius: 10px; overflow: hidden; margin-bottom: 0.5rem;">
+        <div class="progress-bar-fill" id="${id}-tab-bar" style="width: 0%; height: 100%; background: var(--blue); transition: width 0.3s ease;"></div>
+      </div>
+      <div style="display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--text-3); font-style: italic;">
+        <span id="${id}-tab-detail">Đang xếp hàng...</span>
+        <span id="${id}-tab-percent" style="font-weight: 600; color: var(--blue);">0%</span>
+      </div>
+    </div>
+  `;
 
-  try {
-    // ── Step 1: ChEMBL Properties ────────────────────────────────────────
+  setInner('sec-stability', tabLoadingHtml('step-stability', 'Đang phân tích độ ổn định và lão hóa cấp tốc...'));
+  setInner('sec-sra-products', tabLoadingHtml('step-sra', 'Đang tra cứu công thức từ Vidal.ru...'));
+  setInner('sec-patents', tabLoadingHtml('step-patents', 'Đang tìm kiếm patent Google Patents...'));
+  setInner('sec-pharma-list', tabLoadingHtml('step-pharma', 'Đang tra cứu dược điển quốc tế...'));
+  hide('pharma-standards-card');
+  hide('pharma-hplc-card');
+  hide('pharma-chemicals-card');
+  setInner('pharma-count', '');
+
+  const promises = [];
+
+  // Group A: ChEMBL & AI Analysis (Chạy tuần tự với nhau vì AI cần data ChEMBL)
+  const runGroupA = async () => {
     setStepStatus('step-pubchem', 'active');
     try {
-      state.pubchemData = await api('/api/properties', { drugName });
+      state.pubchemData = await api('/api/properties', { drugName, searchId });
       setStepStatus('step-pubchem', 'done', state.pubchemData.chemblId || '');
     } catch (e) {
       setStepStatus('step-pubchem', 'error', e.message);
       state.pubchemData = null;
     }
 
-    // ── Step 2: AI Analysis (polymorph + pKa + đặc điểm) ────────────────
     setStepStatus('step-ai', 'active');
     try {
       state.aiAnalysis = await api('/api/ai-analysis', {
-        drugName, drugData: state.pubchemData, openaiKey, serperKey
+        drugName, drugData: state.pubchemData, openaiKey, serperKey, searchId
       });
       setStepStatus('step-ai', 'done');
     } catch (e) {
@@ -202,15 +326,18 @@ async function startSearch() {
       state.aiAnalysis = null;
     }
 
-    // Render drug tab sớm để user đọc trong khi chờ
+    // Render drug tab sớm để user đọc trong khi chờ các phần khác
     renderDrugTab();
     hide('loading-section');
     show('results-section');
+  };
+  promises.push(runGroupA());
 
-    // ── Step 3: Forced Degradation (luôn chạy, dùng AI nếu không có Serper)
+  // Thread B: Forced Degradation
+  const runStability = async () => {
     setStepStatus('step-stability', 'active');
     try {
-      state.stabilityData = await api('/api/forced-degradation', { drugName, openaiKey, serperKey });
+      state.stabilityData = await api('/api/forced-degradation', { drugName, openaiKey, serperKey, searchId });
       const mode = state.stabilityData.mode === 'web-search' ? 'Web search' : 'AI knowledge';
       setStepStatus('step-stability', 'done', mode);
       renderStabilityTab();
@@ -218,36 +345,65 @@ async function startSearch() {
       setStepStatus('step-stability', 'error', e.message);
       renderStabilityError(e.message);
     }
+  };
+  promises.push(runStability());
 
-    // ── Step 4: Vidal Formulas ────────────────────────────────────────────
+  // Thread C: Vidal Formulas
+  const runSRA = async () => {
     setStepStatus('step-sra', 'active');
     try {
-      state.sraData = await api('/api/sra-formulas', { drugName, dosageForm, openaiKey });
+      state.sraData = await api('/api/sra-formulas', { drugName, dosageForm, openaiKey, searchId });
       setStepStatus('step-sra', 'done', `${state.sraData.totalProducts || (state.sraData.products || []).length} sản phẩm`);
       renderSRATab();
     } catch (e) {
       setStepStatus('step-sra', 'error', e.message);
       renderSRAError(e.message);
     }
+  };
+  promises.push(runSRA());
 
-    // ── Step 5: Patents ─────────────────────────────────────────────────
+  // Thread D: Patents
+  const runPatents = async () => {
     setStepStatus('step-patents', 'active');
     try {
-      state.patentData = await api('/api/patents', { drugName, dosageForm, openaiKey, serperKey });
+      state.patentData = await api('/api/patents', { drugName, dosageForm, openaiKey, serperKey, searchId });
       setStepStatus('step-patents', 'done', `${(state.patentData.patents || []).length} patent`);
       renderPatentsTab();
     } catch (e) {
       setStepStatus('step-patents', 'error', e.message);
       renderPatentsError(e.message === 'HTTP 400' ? 'Bạn cần cung cấp Serper.dev API key trong file .env hoặc điền ở góc trên cùng.' : e.message);
     }
+  };
+  promises.push(runPatents());
 
+  // Thread E: Pharmacopoeia Search
+  const runPharma = async () => {
+    setStepStatus('step-pharma', 'active');
+    try {
+      state.pharmaData = await api('/api/pharmacopoeia/search', { drugName, searchId });
+      const total = state.pharmaData.total || 0;
+      setStepStatus('step-pharma', 'done', `${total} monograph`);
+      renderPharmaTab();
+    } catch (e) {
+      setStepStatus('step-pharma', 'error', e.message);
+      setInner('sec-pharma-list', errorBox(e.message));
+    }
+  };
+  promises.push(runPharma());
+
+  try {
+    await Promise.all(promises);
+  } catch (e) {
+    console.error('Parallel execution error', e);
   } finally {
+    stopProgressPolling();
     document.getElementById('btn-search').disabled = false;
     document.getElementById('loading-section').classList.remove('active');
     hide('loading-section');
     show('results-section');
   }
 }
+
 
 // ── Render: Drug Tab ──────────────────────────────────────────────────────────
 
@@ -895,6 +1051,209 @@ function renderPatentsError(msg) {
 
 function errorBox(msg) {
   return `<div class="error-box"><span>❌</span><span>${escHtml(msg)}</span></div>`;
+}
+
+// ── Render: Pharmacopoeia Tab ─────────────────────────────────────────────────
+
+const BOOK_COLORS = {
+  'USP': { bg: 'rgba(59,130,246,0.12)', border: 'rgba(59,130,246,0.35)', text: '#93c5fd' },
+  'BP':  { bg: 'rgba(16,185,129,0.12)', border: 'rgba(16,185,129,0.35)', text: '#6ee7b7' },
+  'EP':  { bg: 'rgba(139,92,246,0.12)', border: 'rgba(139,92,246,0.35)', text: '#c4b5fd' },
+  'JP':  { bg: 'rgba(245,158,11,0.12)', border: 'rgba(245,158,11,0.35)', text: '#fcd34d' },
+};
+
+function bookBadge(book) {
+  const b = BOOK_COLORS[book] || { bg: 'rgba(100,116,139,0.12)', border: 'rgba(100,116,139,0.35)', text: '#94a3b8' };
+  return `<span style="font-size:.68rem;font-weight:700;padding:2px 8px;border-radius:100px;background:${b.bg};border:1px solid ${b.border};color:${b.text};letter-spacing:.04em">${escHtml(book)}</span>`;
+}
+
+function renderPharmaTab() {
+  const data = state.pharmaData;
+  if (!data || data.total === 0) {
+    setInner('sec-pharma-list', `<div class="empty-state" style="padding:2rem">
+      <div class="empty-state-icon">📭</div>
+      <div class="empty-state-sub">Không tìm thấy monograph nào cho <strong>${escHtml(state.drugName)}</strong> trong cơ sở dữ liệu dược điển.</div>
+    </div>`);
+    setInner('pharma-count', '');
+    return;
+  }
+
+  setInner('pharma-count', `<span style="font-size:.75rem;color:var(--text-3)">${data.total} monograph</span>`);
+
+  const grouped = data.grouped || {};
+  const formOrder = ['Tablet','Extended-Release Tablet','Effervescent Tablet','Chewable Tablet','Dispersible Tablet',
+    'Capsule','Extended-Release Capsule','Oral Solution','Suspension','Oral Drops','Syrup','Granules','Powder',
+    'Injection/Infusion','Suppository','Topical','Ophthalmic','Transdermal','General/Bulk'];
+
+  // Sắp xếp dạng bào chế theo thứ tự ưu tiên
+  const sortedForms = Object.keys(grouped).sort((a, b) => {
+    const ia = formOrder.indexOf(a); const ib = formOrder.indexOf(b);
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+  });
+
+  let html = `<div style="margin-bottom:1rem;padding:.75rem 1rem;background:rgba(16,185,129,0.07);border:1px solid rgba(16,185,129,0.2);border-radius:10px;font-size:.82rem;color:var(--text-2)">
+    💡 <strong>Tìm thấy ${data.total} monograph</strong> cho <strong>${escHtml(state.drugName)}</strong>. Chọn dạng bào chế bên dưới để AI tổng hợp tiêu chuẩn chất lượng, cột sắc ký và hóa chất cần dùng.
+  </div>`;
+
+  for (const form of sortedForms) {
+    const entries = grouped[form];
+    const formId = 'form-' + form.replace(/[^a-zA-Z0-9]/g, '_');
+    html += `
+    <div style="margin-bottom:1rem">
+      <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.6rem">
+        <div style="font-size:.85rem;font-weight:700;color:var(--text-1)">${escHtml(form)}</div>
+        <span style="font-size:.7rem;color:var(--text-3)">${entries.length} monograph</span>
+        <button onclick="selectPharmaForm(${JSON.stringify(form).replace(/"/g,'&quot;')})"
+          style="margin-left:auto;padding:5px 14px;font-size:.75rem;font-weight:600;border-radius:8px;border:none;cursor:pointer;
+          background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;transition:opacity .2s"
+          onmouseover="this.style.opacity='.8'" onmouseout="this.style.opacity='1'">
+          ⚡ Tạo tiêu chuẩn
+        </button>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:.5rem">`;
+    for (const m of entries) {
+      // Link xem PDF trực tiếp (chuyển URL /preview thành /view)
+      const viewUrl = (m.pdfUrl || '').replace('/preview', '/view');
+      html += `<a href="${escHtml(viewUrl)}" target="_blank" rel="noopener"
+        style="display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:8px;
+        background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);
+        font-size:.76rem;color:var(--text-2);text-decoration:none;transition:all .15s"
+        onmouseover="this.style.borderColor='rgba(99,102,241,.5)';this.style.color='#a5b4fc'"
+        onmouseout="this.style.borderColor='rgba(255,255,255,0.1)';this.style.color='var(--text-2)'">
+        ${bookBadge(m.book)} ${escHtml(m.title.replace(new RegExp(state.drugName, 'gi'), state.drugName))} 📄
+      </a>`;
+    }
+    html += `</div></div>`;
+  }
+
+  setInner('sec-pharma-list', html);
+}
+
+async function selectPharmaForm(form) {
+  const { drugName, pharmaData, openaiKey } = state;
+  if (!pharmaData) return;
+
+  // Thu thập monographs của dạng bào chế được chọn
+  const monographs = (pharmaData.grouped[form] || []);
+
+  // Cập nhật UI tiêu đề
+  document.getElementById('pharma-standards-title').textContent =
+    `Tiêu chuẩn chất lượng – ${drugName} – ${form}`;
+
+  // Hiển thị các card với loading
+  show('pharma-standards-card');
+  show('pharma-hplc-card');
+  show('pharma-chemicals-card');
+
+  const loadingHtml = `<div style="padding:2rem;text-align:center">
+    <div style="font-size:1.5rem;margin-bottom:.5rem">⏳</div>
+    <div style="font-size:.85rem;color:var(--text-2)">AI đang tổng hợp tiêu chuẩn chất lượng…</div>
+    <div style="margin:.75rem auto 0;max-width:280px;height:4px;background:rgba(255,255,255,.06);border-radius:10px;overflow:hidden">
+      <div style="height:100%;background:linear-gradient(90deg,#6366f1,#8b5cf6);animation:shimmer 1.5s infinite;background-size:200% 100%"></div>
+    </div>
+  </div>`;
+  setInner('sec-pharma-standards', loadingHtml);
+  setInner('sec-pharma-hplc', loadingHtml);
+  setInner('sec-pharma-chemicals', loadingHtml);
+
+  // Scroll đến card
+  document.getElementById('pharma-standards-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  try {
+    const result = await api('/api/pharmacopoeia/standards', {
+      drugName, dosageForm: form, monographs, openaiKey
+    });
+    renderPharmaStandards(result);
+  } catch (e) {
+    setInner('sec-pharma-standards', errorBox(e.message));
+    setInner('sec-pharma-hplc', '');
+    setInner('sec-pharma-chemicals', '');
+  }
+}
+
+function renderPharmaStandards(data) {
+  // ── Bảng I: Tiêu chuẩn chất lượng ──────────────────────────────────────────
+  const qs = data.qualityStandards || [];
+  if (qs.length) {
+    let tableHtml = `<div style="overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse;font-size:.82rem">
+      <thead>
+        <tr style="background:rgba(99,102,241,0.15)">
+          <th style="padding:10px 12px;text-align:center;border:1px solid rgba(255,255,255,.1);width:40px;font-weight:700;color:var(--text-1)">STT</th>
+          <th style="padding:10px 12px;text-align:left;border:1px solid rgba(255,255,255,.1);width:130px;font-weight:700;color:var(--text-1)">Chỉ tiêu</th>
+          <th style="padding:10px 12px;text-align:left;border:1px solid rgba(255,255,255,.1);font-weight:700;color:var(--text-1)">Yêu cầu</th>
+          <th style="padding:10px 12px;text-align:center;border:1px solid rgba(255,255,255,.1);width:140px;font-weight:700;color:var(--text-1)">Dược điển tham chiếu</th>
+        </tr>
+      </thead><tbody>`;
+    qs.forEach((row, i) => {
+      const bg = i % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,0.005)';
+      tableHtml += `<tr style="background:${bg}">
+        <td style="padding:9px 12px;border:1px solid rgba(255,255,255,.07);text-align:center;font-weight:700;color:var(--text-3)">${escHtml(String(row.stt || i+1))}</td>
+        <td style="padding:9px 12px;border:1px solid rgba(255,255,255,.07);font-weight:600;color:var(--text-1)">${escHtml(row.chiTieu || '')}</td>
+        <td style="padding:9px 12px;border:1px solid rgba(255,255,255,.07);color:var(--text-2);line-height:1.6">${escHtml(row.yeuCau || '').replace(/\n/g, '<br>')}</td>
+        <td style="padding:9px 12px;border:1px solid rgba(255,255,255,.07);text-align:center">
+          <span style="font-size:.7rem;font-weight:600;color:#fbbf24">${escHtml(row.duocDien || '')}</span>
+        </td>
+      </tr>`;
+    });
+    tableHtml += `</tbody></table></div>`;
+    setInner('sec-pharma-standards', tableHtml);
+  } else {
+    setInner('sec-pharma-standards', errorBox('Không có dữ liệu tiêu chuẩn.'));
+  }
+
+  // ── Bảng II: Điều kiện HPLC ─────────────────────────────────────────────────
+  const hplc = data.hplcConditions || [];
+  if (hplc.length) {
+    let h = `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:.82rem">
+      <thead><tr style="background:rgba(59,130,246,0.15)">
+        <th style="padding:10px 12px;text-align:left;border:1px solid rgba(255,255,255,.1);font-weight:700;color:var(--text-1)">Thông số</th>
+        <th style="padding:10px 12px;text-align:left;border:1px solid rgba(255,255,255,.1);font-weight:700;color:var(--text-1)">Giá trị / Yêu cầu</th>
+        <th style="padding:10px 12px;text-align:left;border:1px solid rgba(255,255,255,.1);font-weight:700;color:var(--text-1)">Ghi chú</th>
+      </tr></thead><tbody>`;
+    hplc.forEach((row, i) => {
+      const bg = i % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,0.005)';
+      h += `<tr style="background:${bg}">
+        <td style="padding:9px 12px;border:1px solid rgba(255,255,255,.07);font-weight:600;color:#93c5fd">${escHtml(row.thongSo || '')}</td>
+        <td style="padding:9px 12px;border:1px solid rgba(255,255,255,.07);color:var(--text-1);font-weight:500">${escHtml(row.giaTriYeuCau || '')}</td>
+        <td style="padding:9px 12px;border:1px solid rgba(255,255,255,.07);color:var(--text-3);font-style:italic;font-size:.76rem">${escHtml(row.ghiChu || '')}</td>
+      </tr>`;
+    });
+    h += `</tbody></table></div>`;
+    setInner('sec-pharma-hplc', h);
+  } else {
+    setInner('sec-pharma-hplc', `<p style="color:var(--text-3);font-size:.85rem;padding:1rem">Không áp dụng hoặc không có dữ liệu cột sắc ký.</p>`);
+  }
+
+  // ── Bảng III: Hóa chất ───────────────────────────────────────────────────────
+  const chems = data.chemicals || [];
+  if (chems.length) {
+    const loaiColors = {
+      'Chất đối chiếu': '#fcd34d', 'Dung môi': '#6ee7b7', 'Thuốc thử': '#c4b5fd', 'Đệm': '#93c5fd',
+    };
+    let c = `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:.82rem">
+      <thead><tr style="background:rgba(139,92,246,0.15)">
+        <th style="padding:10px 12px;text-align:left;border:1px solid rgba(255,255,255,.1);font-weight:700;color:var(--text-1)">Tên hóa chất</th>
+        <th style="padding:10px 12px;text-align:center;border:1px solid rgba(255,255,255,.1);width:130px;font-weight:700;color:var(--text-1)">Loại</th>
+        <th style="padding:10px 12px;text-align:left;border:1px solid rgba(255,255,255,.1);font-weight:700;color:var(--text-1)">Mục đích sử dụng</th>
+      </tr></thead><tbody>`;
+    chems.forEach((row, i) => {
+      const bg = i % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,0.005)';
+      const loai = row.loai || '';
+      const loaiColor = Object.entries(loaiColors).find(([k]) => loai.includes(k))?.[1] || '#94a3b8';
+      c += `<tr style="background:${bg}">
+        <td style="padding:9px 12px;border:1px solid rgba(255,255,255,.07);font-weight:600;color:var(--text-1)">${escHtml(row.ten || '')}</td>
+        <td style="padding:9px 12px;border:1px solid rgba(255,255,255,.07);text-align:center">
+          <span style="font-size:.68rem;font-weight:700;padding:2px 8px;border-radius:100px;background:rgba(255,255,255,.06);color:${loaiColor}">${escHtml(loai)}</span>
+        </td>
+        <td style="padding:9px 12px;border:1px solid rgba(255,255,255,.07);color:var(--text-2)">${escHtml(row.mucDich || '')}</td>
+      </tr>`;
+    });
+    c += `</tbody></table></div>`;
+    setInner('sec-pharma-chemicals', c);
+  } else {
+    setInner('sec-pharma-chemicals', `<p style="color:var(--text-3);font-size:.85rem;padding:1rem">Không có dữ liệu hóa chất.</p>`);
+  }
 }
 
 // ── Keyboard shortcut ─────────────────────────────────────────────────────────

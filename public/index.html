@@ -94,6 +94,9 @@
         <button class="tab-btn" role="tab" onclick="switchTab('tab-patents', this)">
           📄 Patent thuốc gốc
         </button>
+        <button class="tab-btn" role="tab" onclick="switchTab('tab-pharma', this)" id="tab-pharma-btn">
+          📖 Dược điển
+        </button>
       </div>
 
       <!-- ══ Tab 1: Drug Properties ═══════════════════════════════════ -->
@@ -252,6 +255,56 @@
         </div>
 
       </div><!-- /tab-patents -->
+
+      <!-- ══ Tab 5: Pharmacopoeia ═══════════════════════════════════════ -->
+      <div id="tab-pharma" class="tab-panel">
+
+        <!-- Search result: danh sách monograph -->
+        <div class="section-card">
+          <div class="section-header">
+            <div class="section-icon icon-green">📖</div>
+            <div class="section-title">Tra cứu dược điển quốc tế (USP / BP / EP / JP)</div>
+            <div class="section-subtitle" id="pharma-count"></div>
+          </div>
+          <div id="sec-pharma-list">
+            <div class="empty-state" style="padding:2rem">
+              <div class="empty-state-icon">📖</div>
+              <div class="empty-state-sub">Nhập tên hoạt chất và bấm Tra cứu để tìm monograph</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tiêu chuẩn chất lượng (hiển thị sau khi user chọn dạng bào chế) -->
+        <div class="section-card" id="pharma-standards-card" style="display:none">
+          <div class="section-header" onclick="toggleSection(this)">
+            <div class="section-icon icon-amber">📋</div>
+            <div class="section-title" id="pharma-standards-title">Tiêu chuẩn chất lượng</div>
+            <button class="collapse-btn">▼</button>
+          </div>
+          <div class="section-body" id="sec-pharma-standards"></div>
+        </div>
+
+        <!-- Cột sắc ký -->
+        <div class="section-card" id="pharma-hplc-card" style="display:none">
+          <div class="section-header" onclick="toggleSection(this)">
+            <div class="section-icon icon-blue">🧫</div>
+            <div class="section-title">Cột sắc ký & Điều kiện HPLC</div>
+            <button class="collapse-btn">▼</button>
+          </div>
+          <div class="section-body" id="sec-pharma-hplc"></div>
+        </div>
+
+        <!-- Hóa chất cần chuẩn bị -->
+        <div class="section-card" id="pharma-chemicals-card" style="display:none">
+          <div class="section-header" onclick="toggleSection(this)">
+            <div class="section-icon icon-purple">🧪</div>
+            <div class="section-title">Hóa chất & Thuốc thử cần chuẩn bị</div>
+            <button class="collapse-btn">▼</button>
+          </div>
+          <div class="section-body" id="sec-pharma-chemicals"></div>
+        </div>
+
+      </div><!-- /tab-pharma -->
 
     </div><!-- /results-section -->
   </main>

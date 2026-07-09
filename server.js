@@ -8,6 +8,14 @@ const app  = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json({ limit: '10mb' }));
+app.use((req, res, next) => {
+  if (req.method === 'POST') {
+    console.log(`[REQUEST] ${req.method} ${req.url} - body:`, JSON.stringify(req.body).substring(0, 300));
+  } else {
+    console.log(`[REQUEST] ${req.method} ${req.url}`);
+  }
+  next();
+});
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/api/diag', async (req, res) => {
@@ -32,6 +40,21 @@ app.get('/api/diag', async (req, res) => {
   }
 
   res.json(diag);
+});
+
+const progressStore = {};
+
+function updateProgress(searchId, step, percent, message) {
+  if (!searchId) return;
+  if (!progressStore[searchId]) {
+    progressStore[searchId] = {};
+  }
+  progressStore[searchId][step] = { percent, message };
+}
+
+app.get('/api/progress', (req, res) => {
+  const { id } = req.query;
+  res.json(progressStore[id] || {});
 });
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
@@ -341,21 +364,28 @@ app.get('/api/image/:chemblId', async (req, res) => {
 // ── Route: ChEMBL Properties ──────────────────────────────────────────────────
 
 app.post('/api/properties', async (req, res) => {
-  const { drugName } = req.body;
+  const { drugName, searchId } = req.body;
   if (!drugName) return res.status(400).json({ error: 'Thiếu tên hoạt chất' });
 
+  updateProgress(searchId, 'properties', 10, 'Khởi động tiến trình tra cứu ChEMBL...');
+
   try {
+    updateProgress(searchId, 'properties', 20, 'Đang tìm kiếm hoạt chất trên ChEMBL...');
     const searchData = await get('https://www.ebi.ac.uk/chembl/api/data/molecule/search.json', {
       q: drugName, limit: 1,
     });
     const molecules = searchData.molecules || [];
-    if (!molecules.length) return res.status(404).json({ error: `Không tìm thấy "${drugName}" trong ChEMBL` });
+    if (!molecules.length) {
+      updateProgress(searchId, 'properties', 100, 'Không tìm thấy hoạt chất trên ChEMBL.');
+      return res.status(404).json({ error: `Không tìm thấy "${drugName}" trong ChEMBL` });
+    }
 
     const mol      = molecules[0];
     const chemblId = mol.molecule_chembl_id;
     const props    = mol.molecule_properties || {};
     const structs  = mol.molecule_structures || {};
 
+    updateProgress(searchId, 'properties', 50, `Đang tải chi tiết cấu trúc cho ${chemblId}...`);
     const [detailRes, mechRes] = await Promise.allSettled([
       get(`https://www.ebi.ac.uk/chembl/api/data/molecule/${chemblId}.json`),
       get('https://www.ebi.ac.uk/chembl/api/data/mechanism.json', { molecule_chembl_id: chemblId, limit: 5 }),
@@ -366,6 +396,7 @@ app.post('/api/properties', async (req, res) => {
 
     const smiles = structs.canonical_smiles || '';
 
+    updateProgress(searchId, 'properties', 100, 'Đã hoàn thành tra cứu ChEMBL.');
     res.json({
       chemblId,
       // Dùng endpoint proxy nội bộ thay vì URL ChEMBL trực tiếp (tránh CORS)
@@ -404,6 +435,7 @@ app.post('/api/properties', async (req, res) => {
       },
     });
   } catch (err) {
+    updateProgress(searchId, 'properties', 100, 'Lỗi tiến trình.');
     res.status(500).json({ error: err.message });
   }
 });
@@ -411,12 +443,15 @@ app.post('/api/properties', async (req, res) => {
 // ── Route: AI Analysis – dữ liệu xác minh + trích dẫn nghiêm ngặt ─────────────
 
 app.post('/api/ai-analysis', async (req, res) => {
-  const { drugName, drugData } = req.body;
+  const { drugName, drugData, searchId } = req.body;
   const openaiKey = req.body.openaiKey || process.env.OPENAI_API_KEY;
   const serperKey = req.body.serperKey || process.env.SERPER_API_KEY;
   if (!openaiKey) return res.status(400).json({ error: 'Thiếu OpenAI API key' });
 
+  updateProgress(searchId, 'aiAnalysis', 10, 'Khởi động tiến trình phân tích ChEMBL/PubChem bằng AI...');
+
   try {
+    updateProgress(searchId, 'aiAnalysis', 25, 'Đang tải dữ liệu thực nghiệm từ PubChem...');
     // ── Lấy dữ liệu thực từ PubChem (song song với ChEMBL) ──────────────────
     const pubchem = await fetchPubchemExperimental(drugName);
     const pc      = pubchem.data;
@@ -429,6 +464,7 @@ app.post('/api/ai-analysis', async (req, res) => {
     let polymorphImage = '';
     if (serperKey) {
       try {
+        updateProgress(searchId, 'aiAnalysis', 45, 'Đang thu thập dữ liệu thù hình & BCS qua Serper...');
         const [dbRes, polyRes, bcsRes, imgRes] = await Promise.all([
           serperSearch(`site:go.drugbank.com/drugs "${drugName}" properties OR half-life OR mechanism OR absorption`, serperKey, 5),
           serperSearch(`${drugName} Polymorphism`, serperKey, 5),
@@ -473,6 +509,7 @@ app.post('/api/ai-analysis', async (req, res) => {
       `[V${i + 1}] ${f.fact} — Nguồn: ${f.db} (${f.source})`
     ).join('\n');
 
+    updateProgress(searchId, 'aiAnalysis', 70, 'Đang gửi yêu cầu phân tích thù hình tinh thể tới OpenAI...');
     // ── AI Analysis với yêu cầu trích dẫn nghiêm ngặt ──────────────────────
     const text = await callOpenAIVerified(openaiKey, [
       {
@@ -553,9 +590,10 @@ Trả về JSON (mỗi field có value + sourceUrl):
   "_chemblId": "${chemblId}",
   "_pubchemCid": ${cid || null}
 }`,
-      },
+      }
     ]);
 
+    updateProgress(searchId, 'aiAnalysis', 95, 'Đang biên dịch kết quả phân tích AI...');
     try {
       const parsed = safeParseJSON(text);
       // Đảm bảo dữ liệu PubChem thực được đính kèm
@@ -565,23 +603,29 @@ Trả về JSON (mỗi field có value + sourceUrl):
       parsed._pubchemUrl      = pcUrl;
       parsed._chemblUrl       = chemblUrl;
       parsed._verifiedFacts   = verifiedFacts;
+      updateProgress(searchId, 'aiAnalysis', 100, 'Hoàn thành.');
       res.json(parsed);
     } catch {
+      updateProgress(searchId, 'aiAnalysis', 100, 'Hoàn thành.');
       res.json({ raw: text, _pubchemCid: cid, _pubchemRawData: pc });
     }
   } catch (err) {
+    updateProgress(searchId, 'aiAnalysis', 100, 'Lỗi tiến trình.');
     res.status(500).json({ error: err.message });
   }
 });
+
 
 // ── Route: Forced Degradation (Semantic Scholar + Serper + OpenAI) ────────────
 
 
 app.post('/api/forced-degradation', async (req, res) => {
-  const { drugName } = req.body;
+  const { drugName, searchId } = req.body;
   const openaiKey = req.body.openaiKey || process.env.OPENAI_API_KEY;
   const serperKey = req.body.serperKey || process.env.SERPER_API_KEY;
   if (!openaiKey) return res.status(400).json({ error: 'Thiếu OpenAI API key' });
+
+  updateProgress(searchId, 'stability', 5, 'Khởi động tiến trình tra cứu độ ổn định...');
 
   try {
     let papers     = [];   // {title, url, abstract, year, authors, body, source}
@@ -589,6 +633,7 @@ app.post('/api/forced-degradation', async (req, res) => {
 
     if (serperKey) {
       try {
+        updateProgress(searchId, 'stability', 10, 'Đang gửi 6 truy vấn tìm kiếm Google...');
         const [rawRes, phRes, ncbiRes, pdfRes, degRes, scholarRes] = await Promise.allSettled([
           serperSearch(`${drugName} forced degradation`, serperKey, 40),
           serperSearch(`${drugName} stability pH range`, serperKey, 20),
@@ -621,16 +666,12 @@ app.post('/api/forced-degradation', async (req, res) => {
         const logContent = combined.map(r => r.title + ' -> ' + r.link).join('\n');
         fs.writeFileSync('serper_debug.log', `=== SERPER COMBINED RESULTS ===\n${logContent}\n`);
 
-        // Ưu tiên các liên kết chất lượng cao (NCBI, PDF, PMC) lên đầu trước khi tải
-        const score = (url) => (url.includes('ncbi.nlm.nih.gov') ? 3 : 0) + (url.includes('.pdf') ? 2 : 0) + (url.includes('aws') ? 1 : 0);
-        combined.sort((a, b) => score(b.link) - score(a.link));
+        // Tải nội dung của tất cả liên kết thu được
+        const chunkSize = 15; // Tăng concurrency lên 15 để tải nhanh hơn khi cào nhiều trang
 
-        // Chỉ tải nội dung của tối đa 15 liên kết chất lượng nhất
-        const targetLinks = combined.slice(0, 15);
-        const chunkSize = 5;
-
-        for (let i = 0; i < targetLinks.length; i += chunkSize) {
-          const chunk = targetLinks.slice(i, i + chunkSize);
+        for (let i = 0; i < combined.length; i += chunkSize) {
+          const chunk = combined.slice(i, i + chunkSize);
+          updateProgress(searchId, 'stability', 20 + Math.round((i / combined.length) * 50), `Đang tải nội dung tài liệu: ${i}/${combined.length}...`);
           await Promise.all(chunk.map(async (r) => {
             let body = '';
             try {
@@ -672,7 +713,7 @@ app.post('/api/forced-degradation', async (req, res) => {
       return score(b) - score(a);
     });
 
-    const aiPapers = sortedPapers.slice(0, 20);
+    const aiPapers = sortedPapers.slice(0, 30);
 
     const paperContext = aiPapers.length
       ? aiPapers.map((p, i) => `[Tài liệu ${i + 1}]
@@ -753,6 +794,7 @@ Trình bày theo cấu trúc JSON:
   "quote": "Trích dẫn nguyên văn (nếu có)"
 }`;
 
+    updateProgress(searchId, 'stability', 75, 'Đang gửi yêu cầu phân tích tổng hợp tới OpenAI...');
     const [text, phText] = await Promise.all([
       callOpenAIVerified(openaiKey, [
         { role: 'system', content: systemMsg },
@@ -764,6 +806,7 @@ Trình bày theo cấu trúc JSON:
       ])
     ]);
 
+    updateProgress(searchId, 'stability', 95, 'Đang xử lý kết quả trả về từ AI...');
     try {
       const parsed       = safeParseJSON(text);
       let phParsed       = null;
@@ -775,11 +818,14 @@ Trình bày theo cấu trúc JSON:
       
       parsed.rawPapers   = papers.map((p) => ({ title: p.title, url: p.url, doi: p.doi, year: p.year, authors: p.authors, source: p.source, hasBody: p.body && p.body.length > 500 }));
       parsed.searchMode  = searchMode;
+      updateProgress(searchId, 'stability', 100, 'Hoàn thành.');
       res.json(parsed);
     } catch {
+      updateProgress(searchId, 'stability', 100, 'Hoàn thành.');
       res.json({ raw: text, rawPapers: papers.map((p) => ({ title: p.title, url: p.url, doi: p.doi, year: p.year, authors: p.authors, source: p.source, hasBody: p.body && p.body.length > 500 })), searchMode });
     }
   } catch (err) {
+    updateProgress(searchId, 'stability', 100, 'Lỗi tiến trình.');
     res.status(500).json({ error: err.message });
   }
 });
@@ -787,14 +833,17 @@ Trình bày theo cấu trúc JSON:
 // ── Route: Vidal.ru Formulas (Thay thế SRA) ───────────────────────────────────────────────
 
 app.post('/api/sra-formulas', async (req, res) => {
-  const { drugName, dosageForm } = req.body;
+  const { drugName, dosageForm, searchId } = req.body;
   const openaiKey = req.body.openaiKey || process.env.OPENAI_API_KEY;
   if (!drugName || !dosageForm) return res.status(400).json({ error: 'Thiếu tên hoạt chất hoặc dạng bào chế' });
   if (!openaiKey) return res.status(400).json({ error: 'Thiếu OpenAI API key' });
 
+  updateProgress(searchId, 'vidal', 5, 'Khởi động tiến trình tra cứu công thức Nga...');
+
   try {
     const cheerio = require('cheerio');
     // 1. Tìm kiếm trên Vidal.ru
+    updateProgress(searchId, 'vidal', 10, 'Đang truy vấn công thức trên Vidal.ru...');
     const searchUrl = `https://www.vidal.ru/search?q=${encodeURIComponent(drugName)}`;
     const searchRes = await axios.get(searchUrl, {
       headers: { 'User-Agent': 'Mozilla/5.0' },
@@ -811,18 +860,23 @@ app.post('/api/sra-formulas', async (req, res) => {
     });
 
     if (links.length === 0) {
+      updateProgress(searchId, 'vidal', 100, 'Không tìm thấy sản phẩm nào.');
       return res.json({ products: [], totalProducts: 0, dataSource: 'Vidal.ru (Nga)' });
     }
 
     // 2. Lấy dữ liệu chi tiết (tất cả sản phẩm) với concurrency limit
     const productData = [];
-    const chunkSize = 5; // Xử lý 5 request cùng lúc để tránh nghẽn
+    const chunkSize = 15; // Tăng lên 15 request cùng lúc để cào tất cả sản phẩm nhanh hơn
     const chunks = [];
     for (let i = 0; i < links.length; i += chunkSize) {
       chunks.push(links.slice(i, i + chunkSize));
     }
 
-    for (const chunk of chunks) {
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const processedCount = i * chunkSize;
+      updateProgress(searchId, 'vidal', 20 + Math.round((processedCount / links.length) * 60), `Đang tải chi tiết sản phẩm: ${processedCount}/${links.length}...`);
+      
       await Promise.all(chunk.map(async (link) => {
         try {
           const detailRes = await axios.get(link.url, {
@@ -848,6 +902,7 @@ app.post('/api/sra-formulas', async (req, res) => {
     }
 
     // 3. Sử dụng AI để dịch và lọc theo dạng bào chế
+    updateProgress(searchId, 'vidal', 80, 'Đang gửi dữ liệu tiếng Nga tới OpenAI để dịch...');
     const promptData = productData.map((p, i) => `[Sản phẩm ${i + 1}]\nTên: ${p.title}\nURL: ${p.url}\nThành phần (Tiếng Nga): ${p.text}`).join('\n\n');
     
     const aiSystem = `Bạn là chuyên gia bào chế và phiên dịch Dược phẩm Nga. Nhiệm vụ:
@@ -890,6 +945,7 @@ Cấu trúc JSON:
       { role: 'user', content: `Hoạt chất mục tiêu: ${drugName}\nDạng bào chế mục tiêu: ${dosageForm}\n\nDữ liệu tiếng Nga:\n${promptData}\n\nHãy xuất JSON:` }
     ]);
 
+    updateProgress(searchId, 'vidal', 95, 'Đang biên dịch kết quả tiếng Nga...');
     let parsed = { products: [] };
     try {
       parsed = safeParseJSON(text);
@@ -897,6 +953,7 @@ Cấu trúc JSON:
       console.error('Lỗi parse JSON từ AI');
     }
 
+    updateProgress(searchId, 'vidal', 100, 'Hoàn thành.');
     res.json({
       products: parsed.products || [],
       totalProducts: (parsed.products || []).length,
@@ -906,6 +963,7 @@ Cấu trúc JSON:
     });
   } catch (err) {
     console.error('Vidal Error:', err);
+    updateProgress(searchId, 'vidal', 100, 'Lỗi tiến trình.');
     res.status(500).json({ error: err.message });
   }
 });
@@ -913,12 +971,15 @@ Cấu trúc JSON:
 // ── Route: Patents ────────────────────────────────────────────────────────────
 
 app.post('/api/patents', async (req, res) => {
-  const { drugName, dosageForm } = req.body;
+  const { drugName, dosageForm, searchId } = req.body;
   const openaiKey = req.body.openaiKey || process.env.OPENAI_API_KEY;
   const serperKey = req.body.serperKey || process.env.SERPER_API_KEY;
   if (!openaiKey || !serperKey) return res.status(400).json({ error: 'Thiếu API key' });
 
+  updateProgress(searchId, 'patents', 5, 'Khởi động tiến trình tra cứu patent...');
+
   try {
+    updateProgress(searchId, 'patents', 15, 'Đang tìm kiếm trên Google Patents...');
     const q = `"${drugName}"${dosageForm ? ` "${dosageForm}"` : ''} patent`;
     const [gPat, gen] = await Promise.allSettled([
       serperSearch(`site:patents.google.com ${q}`, serperKey, 20),
@@ -933,12 +994,16 @@ app.post('/api/patents', async (req, res) => {
     const unique = organic.filter((r) => { if (seen.has(r.link)) return false; seen.add(r.link); return true; });
 
     const docs = [];
-    for (const p of unique.slice(0, 15)) {
+    const targetPatents = unique.slice(0, 15);
+    for (let i = 0; i < targetPatents.length; i++) {
+      const p = targetPatents[i];
+      updateProgress(searchId, 'patents', 30 + Math.round((i / targetPatents.length) * 50), `Đang tải nội dung bằng sáng chế: ${i}/${targetPatents.length}...`);
       await delay(200);
       const body = await fetchText(p.link);
       docs.push({ title: p.title, url: p.link, snippet: p.snippet, body: body || '' });
     }
 
+    updateProgress(searchId, 'patents', 80, 'Đang gửi dữ liệu bằng sáng chế tới OpenAI để phân tích...');
     const text = await callOpenAI(openaiKey, [
       { role: 'system', content: 'Bạn là chuyên gia phân tích patent dược phẩm.\nNhiệm vụ:\n0. LỌC NGHIÊM NGẶT: Chỉ trích xuất các patent có nội dung CHÍNH xác với dạng bào chế được yêu cầu. NẾU BÀI BÁO NÓI VỀ DẠNG BÀO CHẾ KHÁC (VD: Yêu cầu Capsule nhưng patent là Tablet), BỎ QUA NGAY LẬP TỨC.\n1. TÓM TẮT CHUYÊN SÂU CÁC VÍ DỤ (EXAMPLES): Phải đọc sâu vào phần Examples của patent để lấy ra các thông số thử nghiệm cụ thể.\n2. LÝ DO CHỌN CÔNG THỨC: Phân tích thật kỹ tiêu chí/phương pháp đánh giá (độ hòa tan, độ cứng, độ ổn định...) dẫn đến việc tác giả chọn công thức ưu việt nhất.\n3. TRÍCH XUẤT CÔNG THỨC TỐI ƯU NHẤT (Preferred Embodiment) dưới dạng danh sách (bullet points) kèm hàm lượng/tỷ lệ cụ thể.\n4. Trích xuất QUY TRÌNH BÀO CHẾ chi tiết từng bước (step-by-step), bao gồm các thông số kỹ thuật (nhiệt độ, thời gian...).\n5. Ghi rõ số patent và URL. TUYỆT ĐỐI KHÔNG BỊA ĐẶT HOẶC SUY LUẬN. TẤT CẢ thông tin đưa ra mà có trích dẫn nguồn thì BẮT BUỘC thông tin đó phải có xuất xứ CHÍNH XÁC từ nguồn đó.\n6. Trả lời bằng tiếng Việt. JSON hợp lệ KHÔNG có markdown.' },
       {
@@ -970,12 +1035,169 @@ app.post('/api/patents', async (req, res) => {
       }
     ]);
 
+    updateProgress(searchId, 'patents', 95, 'Đang xử lý phân tích patent...');
     try {
       const parsed    = safeParseJSON(text);
       parsed.rawLinks = unique.map((r) => ({ title: r.title, url: r.link, snippet: r.snippet }));
+      updateProgress(searchId, 'patents', 100, 'Hoàn thành.');
       res.json(parsed);
-    } catch { res.json({ raw: text, rawLinks: unique }); }
+    } catch {
+      updateProgress(searchId, 'patents', 100, 'Hoàn thành.');
+      res.json({ raw: text, rawLinks: unique });
+    }
   } catch (err) {
+    updateProgress(searchId, 'patents', 100, 'Lỗi tiến trình.');
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Route: Pharmacopoeia Search ───────────────────────────────────────────────
+// Cache dữ liệu webofpharma để không phải fetch lại mỗi lần
+let _pharmacoData = null;
+let _pharmacoFetchedAt = 0;
+
+async function getPharmacoeiaData() {
+  const now = Date.now();
+  if (_pharmacoData && now - _pharmacoFetchedAt < 6 * 60 * 60 * 1000) return _pharmacoData; // cache 6h
+  console.log('[Pharmacopoeia] Fetching data from webofpharma.com...');
+  const res = await axios.get('https://www.webofpharma.com/2025/08/pharmacopoeia-search-engine.html', {
+    timeout: 30000,
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120' }
+  });
+  const html = res.data;
+  // Trích xuất mảng pharmacopoeiaData từ JavaScript trong HTML
+  const match = html.match(/const pharmacopoeiaData\s*=\s*(\[[\s\S]*?\]);\s*(?:\/\/|function|const|let|var|document|\n\s*\n)/);
+  if (!match) throw new Error('Không thể trích xuất dữ liệu pharmacopoeia từ webofpharma.com');
+  const vm = require('vm');
+  _pharmacoData = vm.runInNewContext(match[1]);
+  _pharmacoFetchedAt = now;
+  console.log(`[Pharmacopoeia] Loaded ${_pharmacoData.length} entries.`);
+  return _pharmacoData;
+}
+
+app.post('/api/pharmacopoeia/search', async (req, res) => {
+  const { drugName, searchId } = req.body;
+  if (!drugName) return res.status(400).json({ error: 'Thiếu tên hoạt chất' });
+
+  updateProgress(searchId, 'pharma', 20, 'Đang tải dữ liệu dược điển...');
+  try {
+    const allData = await getPharmacoeiaData();
+    updateProgress(searchId, 'pharma', 60, 'Đang phân tích các monograph...');
+    const q = drugName.trim().toLowerCase();
+    // Tạo các từ khoá tìm kiếm: tên gốc + tên thay thế phổ biến
+    const aliases = [q];
+    if (q === 'paracetamol' || q === 'acetaminophen') { aliases.push('paracetamol', 'acetaminophen'); }
+
+    const results = allData.filter(entry => {
+      const t = (entry.title || '').toLowerCase();
+      return aliases.some(a => t.includes(a));
+    });
+
+    // Nhóm theo dạng bào chế (trích từ title)
+    const grouped = {};
+    for (const entry of results) {
+      const title = entry.title || '';
+      // Phát hiện dạng bào chế từ title
+      let form = 'General/Bulk';
+      const tl = title.toLowerCase();
+      if (tl.includes('extended-release tablet') || tl.includes('prolonged-release tablet') || tl.includes('modified-release tablet')) form = 'Extended-Release Tablet';
+      else if (tl.includes('effervescent tablet') || tl.includes('effervescent oral')) form = 'Effervescent Tablet';
+      else if (tl.includes('chewable tablet')) form = 'Chewable Tablet';
+      else if (tl.includes('dispersible tablet')) form = 'Dispersible Tablet';
+      else if (tl.includes('tablet')) form = 'Tablet';
+      else if (tl.includes('extended-release capsule') || tl.includes('prolonged-release capsule')) form = 'Extended-Release Capsule';
+      else if (tl.includes('capsule')) form = 'Capsule';
+      else if (tl.includes('oral solution') || tl.includes('oral liquid')) form = 'Oral Solution';
+      else if (tl.includes('oral suspension') || tl.includes('suspension')) form = 'Suspension';
+      else if (tl.includes('oral drops') || tl.includes('drops')) form = 'Oral Drops';
+      else if (tl.includes('syrup')) form = 'Syrup';
+      else if (tl.includes('granule') || tl.includes('granules')) form = 'Granules';
+      else if (tl.includes('powder')) form = 'Powder';
+      else if (tl.includes('injection') || tl.includes('infusion') || tl.includes('parenteral')) form = 'Injection/Infusion';
+      else if (tl.includes('suppositorie') || tl.includes('suppository')) form = 'Suppository';
+      else if (tl.includes('cream') || tl.includes('ointment') || tl.includes('gel')) form = 'Topical';
+      else if (tl.includes('eye drop') || tl.includes('ophthalmic')) form = 'Ophthalmic';
+      else if (tl.includes('patch') || tl.includes('transdermal')) form = 'Transdermal';
+      if (!grouped[form]) grouped[form] = [];
+      grouped[form].push({ id: entry.id, title, book: entry.book, description: entry.description, pdfUrl: entry.pdfUrl });
+    }
+
+    updateProgress(searchId, 'pharma', 100, 'Hoàn thành.');
+    res.json({ total: results.length, grouped });
+  } catch (err) {
+    updateProgress(searchId, 'pharma', 100, 'Lỗi tiến trình.');
+    console.error('[Pharmacopoeia search error]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/pharmacopoeia/standards', async (req, res) => {
+  const { drugName, dosageForm, monographs, openaiKey } = req.body;
+  if (!drugName || !dosageForm) return res.status(400).json({ error: 'Thiếu tên hoạt chất hoặc dạng bào chế' });
+  const apiKey = openaiKey || process.env.OPENAI_API_KEY;
+  if (!apiKey) return res.status(400).json({ error: 'Thiếu OpenAI API key' });
+
+  try {
+    const monographList = (monographs || []).map((m, i) =>
+      `${i+1}. [${m.book}] ${m.title} – PDF: ${m.pdfUrl}`
+    ).join('\n');
+
+    const prompt = `Bạn là chuyên gia xây dựng tiêu chuẩn chất lượng dược phẩm (QC Specialist).
+Hoạt chất: "${drugName}"
+Dạng bào chế: "${dosageForm}"
+Monograph tìm được từ các dược điển:
+${monographList || 'Không tìm thấy monograph cụ thể'}
+
+Hãy xây dựng đầy đủ và chi tiết theo 3 phần, trả về JSON hợp lệ (KHÔNG có markdown):
+
+{
+  "qualityStandards": [
+    {
+      "stt": 1,
+      "chiTieu": "Cảm quan",
+      "yeuCau": "Mô tả yêu cầu chi tiết theo dược điển",
+      "duocDien": "USP 2025 / BP 2024 / EP 11 / DĐVN V"
+    }
+  ],
+  "hplcConditions": [
+    {
+      "thongSo": "Tên cột",
+      "giaTriYeuCau": "C18, 250 x 4.6 mm, 5 µm",
+      "ghiChu": "Ví dụ: Waters Symmetry, Agilent Zorbax..."
+    }
+  ],
+  "chemicals": [
+    {
+      "ten": "Tên hóa chất / chất đối chiếu",
+      "loai": "Chất đối chiếu / Dung môi / Thuốc thử / Đệm",
+      "mucDich": "Mục đích sử dụng trong phép thử nào"
+    }
+  ]
+}
+
+Tiêu chuẩn chất lượng (qualityStandards) phải gồm ĐẦY ĐỦ các chỉ tiêu sau (nếu áp dụng cho dạng bào chế này):
+1. Cảm quan
+2. Định tính (HPLC, IR, UV, phản ứng hóa học...)
+3. Độ hòa tan (nêu rõ % Q, môi trường, thiết bị, thời gian)
+4. Tạp chất (tạp đã biết tên + giới hạn, tạp không biết tên + giới hạn, tổng tạp)
+5. Định lượng (% so với nhãn)
+6. Giới hạn nhiễm khuẩn (TVSVHK, bào tử nấm men nấm mốc, không có E.coli...)
+7. Đồng đều khối lượng hoặc Đồng đều hàm lượng
+8. Độ rã (nếu là viên)
+9. Độ cứng (nếu là viên nén)
+10. Độ mài mòn (nếu là viên nén)
+11. pH (nếu là dung dịch/hỗn dịch)
+12. Thể tích chiết được (nếu là dạng lỏng)
+13. Bất kỳ chỉ tiêu quan trọng nào khác của dạng bào chế này
+
+Điều kiện HPLC (hplcConditions) gồm: tên cột, kích thước cột, pha động (thành phần + tỷ lệ), tốc độ dòng, bước sóng, thể tích tiêm, nhiệt độ cột.
+Danh sách hóa chất (chemicals) phải liệt kê TẤT CẢ chất đối chiếu, dung môi, thuốc thử, đệm cần để thực hiện các phép thử trên.`;
+
+    const text = await callOpenAI(apiKey, [{ role: 'user', content: prompt }], 'gpt-4o', 3);
+    const parsed = safeParseJSON(text);
+    res.json(parsed);
+  } catch (err) {
+    console.error('[Pharmacopoeia standards error]', err.message);
     res.status(500).json({ error: err.message });
   }
 });
