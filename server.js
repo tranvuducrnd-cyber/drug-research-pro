@@ -1106,20 +1106,45 @@ let _pharmacoFetchedAt = 0;
 async function getPharmacoeiaData() {
   const now = Date.now();
   if (_pharmacoData && now - _pharmacoFetchedAt < 6 * 60 * 60 * 1000) return _pharmacoData; // cache 6h
-  console.log('[Pharmacopoeia] Fetching data from webofpharma.com...');
-  const res = await axios.get('https://www.webofpharma.com/2025/08/pharmacopoeia-search-engine.html', {
-    timeout: 30000,
-    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120' }
-  });
-  const html = res.data;
-  // Trích xuất mảng pharmacopoeiaData từ JavaScript trong HTML
-  const match = html.match(/const pharmacopoeiaData\s*=\s*(\[[\s\S]*?\]);\s*(?:\/\/|function|const|let|var|document|\n\s*\n)/);
-  if (!match) throw new Error('Không thể trích xuất dữ liệu pharmacopoeia từ webofpharma.com');
-  const vm = require('vm');
-  _pharmacoData = vm.runInNewContext(match[1]);
-  _pharmacoFetchedAt = now;
-  console.log(`[Pharmacopoeia] Loaded ${_pharmacoData.length} entries.`);
-  return _pharmacoData;
+  
+  const fs = require('fs');
+  const path = require('path');
+  const localPath = path.join(__dirname, 'pharmacopoeia_data.json');
+
+  try {
+    console.log('[Pharmacopoeia] Fetching data from webofpharma.com...');
+    const res = await axios.get('https://www.webofpharma.com/2025/08/pharmacopoeia-search-engine.html', {
+      timeout: 10000,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120' }
+    });
+    const html = res.data;
+    const match = html.match(/const pharmacopoeiaData\s*=\s*(\[[\s\S]*?\]);\s*(?:\/\/|function|const|let|var|document|\n\s*\n)/);
+    if (match) {
+      const vm = require('vm');
+      _pharmacoData = vm.runInNewContext(match[1]);
+      _pharmacoFetchedAt = now;
+      console.log(`[Pharmacopoeia] Loaded ${_pharmacoData.length} entries from Web.`);
+      fs.writeFile(localPath, JSON.stringify(_pharmacoData, null, 2), 'utf8', () => {});
+      return _pharmacoData;
+    }
+  } catch (e) {
+    console.warn('[Pharmacopoeia] Web request failed, falling back to local file:', e.message);
+  }
+
+  // Fallback đọc file cục bộ
+  if (fs.existsSync(localPath)) {
+    try {
+      const localData = JSON.parse(fs.readFileSync(localPath, 'utf8'));
+      _pharmacoData = localData;
+      _pharmacoFetchedAt = now;
+      console.log(`[Pharmacopoeia] Loaded ${_pharmacoData.length} entries from local JSON fallback.`);
+      return _pharmacoData;
+    } catch (err) {
+      console.error('[Pharmacopoeia] Error parsing local JSON file:', err.message);
+    }
+  }
+
+  throw new Error('Không thể tải dữ liệu dược điển từ cả máy chủ trực tuyến và bản sao lưu cục bộ.');
 }
 
 // ── Route: Proxy image from PharmDE to avoid CORS/Hotlinking ──────────────────
