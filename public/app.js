@@ -98,6 +98,7 @@ const STEPS = [
   { id: 'step-sra',         label: 'Tra cứu công thức web Nga (Vidal.ru)',            icon: '🇷🇺' },
   { id: 'step-patents',     label: 'Tìm kiếm patent Google Patents',                  icon: '📄' },
   { id: 'step-pharma',      label: 'Tra cứu dược điển (USP / BP / EP / JP)',          icon: '📖' },
+  { id: 'step-compatibility', label: 'Tương tác hoạt chất - tá dược (PharmDE)',       icon: '🤝' },
 ];
 
 function renderProgressSteps() {
@@ -181,6 +182,9 @@ function startProgressPolling(searchId) {
       if (data.patents) {
         updateStepProgressBar('step-patents', data.patents.percent, data.patents.message);
       }
+      if (data.compatibility) {
+        updateStepProgressBar('step-compatibility', data.compatibility.percent, data.compatibility.message);
+      }
     } catch (e) {
       console.error('Error polling progress:', e);
     }
@@ -259,6 +263,7 @@ async function startSearch() {
     sraData: null,
     patentData: null,
     pharmaData: null,
+    compatibilityData: null,
   });
 
   // Reset UI và ẩn các card kết quả từ lượt tìm kiếm trước
@@ -297,6 +302,7 @@ async function startSearch() {
   setInner('sec-sra-products', tabLoadingHtml('step-sra', 'Đang tra cứu công thức từ Vidal.ru...'));
   setInner('sec-patents', tabLoadingHtml('step-patents', 'Đang tìm kiếm patent Google Patents...'));
   setInner('sec-pharma-list', tabLoadingHtml('step-pharma', 'Đang tra cứu dược điển quốc tế...'));
+  setInner('sec-compatibility-results', tabLoadingHtml('step-compatibility', 'Đang phân tích tương tác tá dược trên PharmDE...'));
   hide('pharma-standards-card');
   hide('pharma-hplc-card');
   hide('pharma-chemicals-card');
@@ -390,6 +396,24 @@ async function startSearch() {
     }
   };
   promises.push(runPharma());
+
+  // Thread F: Compatibility (PharmDE)
+  const runCompatibility = async () => {
+    setStepStatus('step-compatibility', 'active');
+    try {
+      let smiles = '';
+      if (state.pubchemData && state.pubchemData.properties) {
+        smiles = state.pubchemData.properties.CanonicalSMILES || '';
+      }
+      state.compatibilityData = await api('/api/compatibility', { drugName, smiles, searchId });
+      setStepStatus('step-compatibility', 'done', `Đã tìm thấy ${state.compatibilityData.total || 0} tương tác`);
+      renderCompatibilityTab();
+    } catch (e) {
+      setStepStatus('step-compatibility', 'error', e.message);
+      renderCompatibilityError(e.message);
+    }
+  };
+  promises.push(runCompatibility());
 
   try {
     await Promise.all(promises);
@@ -921,10 +945,22 @@ function renderSRATab() {
         </div>
         ${pr.excipients?.length ? `
         <div style="margin-top:.6rem">
-          <div class="data-item-label" style="margin-bottom:5px">Tá dược:</div>
-          <div class="excipients-list">
-            ${pr.excipients.map((e) => `<span class="excipient-tag">${escHtml(e)}</span>`).join('')}
-          </div>
+          <div class="data-item-label" style="margin-bottom:6px">${typeof pr.excipients[0] === 'object' ? 'Tá dược & Vai trò' : 'Tá dược'}:</div>
+          ${typeof pr.excipients[0] === 'object' ? `
+            <div class="excipients-container" style="display:flex; flex-direction:column; gap:6px; margin-top:4px;">
+              ${pr.excipients.map((e) => `
+                <div class="excipient-row" style="display:flex; justify-content:space-between; align-items:center; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.05); padding:8px 12px; border-radius:6px; font-size:0.82rem; gap:12px;">
+                  <div style="font-weight:600; color:var(--text-2); flex:1; text-align:left;">${escHtml(e.name)}</div>
+                  <div style="color:var(--text-3); font-weight:500; font-size:0.8rem; width:80px; text-align:right; white-space:nowrap;">${escHtml(e.amount || 'N/A')}</div>
+                  <div style="font-size:0.72rem; color:#c4b5fd; font-weight:600; background:rgba(139,92,246,0.12); border:1px solid rgba(139,92,246,0.25); padding:2px 8px; border-radius:100px; text-align:center; min-width:110px; letter-spacing:0.02em; white-space:nowrap;">${escHtml(e.role)}</div>
+                </div>
+              `).join('')}
+            </div>
+          ` : `
+            <div class="excipients-list">
+              ${pr.excipients.map((e) => `<span class="excipient-tag">${escHtml(e)}</span>`).join('')}
+            </div>
+          `}
         </div>` : ''}
         ${pr.manufacturingProcess ? `
         <div style="margin-top:.8rem; padding: .6rem; background: rgba(168,85,247,.08); border-left: 3px solid #a855f7; border-radius: 4px;">
@@ -1092,36 +1128,38 @@ function renderPharmaTab() {
   });
 
   let html = `<div style="margin-bottom:1rem;padding:.75rem 1rem;background:rgba(16,185,129,0.07);border:1px solid rgba(16,185,129,0.2);border-radius:10px;font-size:.82rem;color:var(--text-2)">
-    💡 <strong>Tìm thấy ${data.total} monograph</strong> cho <strong>${escHtml(state.drugName)}</strong>. Chọn dạng bào chế bên dưới để AI tổng hợp tiêu chuẩn chất lượng, cột sắc ký và hóa chất cần dùng.
+    💡 <strong>Tìm thấy ${data.total} monograph</strong> cho <strong>${escHtml(state.drugName)}</strong>. Bấm vào tiêu đề monograph cụ thể dưới đây để AI tự động xây dựng tiêu chuẩn chất lượng 100% theo Dược điển đó.
   </div>`;
 
   for (const form of sortedForms) {
     const entries = grouped[form];
     const formId = 'form-' + form.replace(/[^a-zA-Z0-9]/g, '_');
     html += `
-    <div style="margin-bottom:1rem">
+    <div style="margin-bottom:1.2rem">
       <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.6rem">
         <div style="font-size:.85rem;font-weight:700;color:var(--text-1)">${escHtml(form)}</div>
         <span style="font-size:.7rem;color:var(--text-3)">${entries.length} monograph</span>
-        <button onclick="selectPharmaForm(${JSON.stringify(form).replace(/"/g,'&quot;')})"
-          style="margin-left:auto;padding:5px 14px;font-size:.75rem;font-weight:600;border-radius:8px;border:none;cursor:pointer;
-          background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;transition:opacity .2s"
-          onmouseover="this.style.opacity='.8'" onmouseout="this.style.opacity='1'">
-          ⚡ Tạo tiêu chuẩn
-        </button>
       </div>
-      <div style="display:flex;flex-wrap:wrap;gap:.5rem">`;
+      <div style="display:flex;flex-wrap:wrap;gap:.6rem">`;
     for (const m of entries) {
-      // Link xem PDF trực tiếp (chuyển URL /preview thành /view)
       const viewUrl = (m.pdfUrl || '').replace('/preview', '/view');
-      html += `<a href="${escHtml(viewUrl)}" target="_blank" rel="noopener"
-        style="display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:8px;
-        background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);
-        font-size:.76rem;color:var(--text-2);text-decoration:none;transition:all .15s"
-        onmouseover="this.style.borderColor='rgba(99,102,241,.5)';this.style.color='#a5b4fc'"
-        onmouseout="this.style.borderColor='rgba(255,255,255,0.1)';this.style.color='var(--text-2)'">
-        ${bookBadge(m.book)} ${escHtml(m.title.replace(new RegExp(state.drugName, 'gi'), state.drugName))} 📄
-      </a>`;
+      const mJson = JSON.stringify(m).replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+      html += `
+      <div class="monograph-item" style="display:inline-flex;align-items:center;gap:8px;padding:6px 12px;border-radius:8px;
+        background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);font-size:.76rem;transition:all .15s"
+        onmouseover="this.style.borderColor='rgba(99,102,241,.5)';"
+        onmouseout="this.style.borderColor='rgba(255,255,255,0.1)';">
+        <span style="cursor:pointer;color:var(--text-2);display:inline-flex;align-items:center;gap:6px;font-weight:600"
+          onclick="selectMonograph(${mJson})"
+          onmouseover="this.style.color='#a5b4fc'"
+          onmouseout="this.style.color='var(--text-2)'">
+          ${bookBadge(m.book)} ${escHtml(m.title)} ⚡
+        </span>
+        <a href="${escHtml(viewUrl)}" target="_blank" rel="noopener" title="Xem PDF bản gốc"
+          style="color:var(--text-3);text-decoration:none;font-size:.82rem;display:inline-flex;align-items:center;transition:color .15s"
+          onmouseover="this.style.color='var(--blue)'"
+          onmouseout="this.style.color='var(--text-3)'">📄</a>
+      </div>`;
     }
     html += `</div></div>`;
   }
@@ -1129,16 +1167,12 @@ function renderPharmaTab() {
   setInner('sec-pharma-list', html);
 }
 
-async function selectPharmaForm(form) {
-  const { drugName, pharmaData, openaiKey } = state;
-  if (!pharmaData) return;
-
-  // Thu thập monographs của dạng bào chế được chọn
-  const monographs = (pharmaData.grouped[form] || []);
+async function selectMonograph(monograph) {
+  const { drugName, openaiKey } = state;
 
   // Cập nhật UI tiêu đề
   document.getElementById('pharma-standards-title').textContent =
-    `Tiêu chuẩn chất lượng – ${drugName} – ${form}`;
+    `Tiêu chuẩn chất lượng – ${drugName} – ${monograph.title} (${monograph.book})`;
 
   // Hiển thị các card với loading
   show('pharma-standards-card');
@@ -1147,7 +1181,7 @@ async function selectPharmaForm(form) {
 
   const loadingHtml = `<div style="padding:2rem;text-align:center">
     <div style="font-size:1.5rem;margin-bottom:.5rem">⏳</div>
-    <div style="font-size:.85rem;color:var(--text-2)">AI đang tổng hợp tiêu chuẩn chất lượng…</div>
+    <div style="font-size:.85rem;color:var(--text-2)">AI đang xây dựng tiêu chuẩn theo dược điển ${monograph.book}…</div>
     <div style="margin:.75rem auto 0;max-width:280px;height:4px;background:rgba(255,255,255,.06);border-radius:10px;overflow:hidden">
       <div style="height:100%;background:linear-gradient(90deg,#6366f1,#8b5cf6);animation:shimmer 1.5s infinite;background-size:200% 100%"></div>
     </div>
@@ -1161,7 +1195,10 @@ async function selectPharmaForm(form) {
 
   try {
     const result = await api('/api/pharmacopoeia/standards', {
-      drugName, dosageForm: form, monographs, openaiKey
+      drugName,
+      dosageForm: state.dosageForm || 'Tablet',
+      selectedMonograph: monograph,
+      openaiKey
     });
     renderPharmaStandards(result);
   } catch (e) {
@@ -1254,6 +1291,84 @@ function renderPharmaStandards(data) {
   } else {
     setInner('sec-pharma-chemicals', `<p style="color:var(--text-3);font-size:.85rem;padding:1rem">Không có dữ liệu hóa chất.</p>`);
   }
+}
+
+// ── Render: Compatibility Tab ──────────────────────────────────────────────────
+function renderCompatibilityTab() {
+  const data = state.compatibilityData;
+  if (!data) return;
+
+  setInner('compatibility-smiles-info', `SMILES: <code style="background:rgba(255,255,255,0.06);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:0.78rem;color:var(--cyan)">${escHtml(data.smiles)}</code>`);
+
+  if (!data.incompatibilities || data.incompatibilities.length === 0) {
+    setInner('sec-compatibility-results', `
+      <div class="empty-state" style="padding: 3rem 2rem; border: 1px dashed rgba(16,185,129,0.3); background: rgba(16,185,129,0.03); border-radius: var(--r-lg)">
+        <div class="empty-state-icon" style="color:var(--green)">✅</div>
+        <div class="empty-state-title" style="color:var(--green)">Không phát hiện tương tác không tương hợp</div>
+        <div class="empty-state-sub">Hệ thống chuyên gia PharmDE không phát hiện nhóm cấu trúc hoặc phản ứng không tương hợp nào giữa hoạt chất này với các tá dược thông dụng.</div>
+        <div style="margin-top:1rem;font-size:0.75rem;color:var(--text-3)">Nguồn dữ liệu: <a href="${escHtml(data.sourceUrl)}" target="_blank" style="color:var(--cyan);text-decoration:underline">PharmDE Database</a></div>
+      </div>
+    `);
+    return;
+  }
+
+  let html = `<div style="display:flex;flex-direction:column;gap:1.5rem">`;
+  data.incompatibilities.forEach((item) => {
+    html += `
+      <div class="compatibility-item" style="display: flex; gap: 1.5rem; border-bottom: 1px solid var(--card-border); padding-bottom: 1.5rem; align-items: flex-start;">
+        ${item.imageUrl ? `
+          <div class="compatibility-img-wrap" style="width: 140px; flex-shrink: 0; background: #fff; border-radius: var(--r-md); padding: 8px; display: flex; align-items: center; justify-content: center; aspect-ratio: 1; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.15); transition: transform 0.2s ease;">
+            <img src="${escHtml(item.imageUrl)}" style="max-width: 100%; max-height: 100%; object-fit: contain;" />
+          </div>
+        ` : ''}
+        <div style="flex-grow: 1;">
+          <h4 style="color: var(--cyan); margin-bottom: 0.6rem; font-size: 1.05rem; font-weight: 700;">${escHtml(item.title)}</h4>
+          
+          <div style="display: grid; grid-template-columns: 150px 1fr; gap: 0.5rem 1rem; font-size: 0.82rem; margin-bottom: 0.8rem; line-height: 1.5;">
+            <span style="color: var(--text-3); font-weight: 600;">Loại phản ứng:</span>
+            <span style="color: var(--text-1); font-weight: 500;">${escHtml(item.reactionType || 'N/A')}</span>
+            
+            <span style="color: var(--text-3); font-weight: 600;">Mô tả tương tác:</span>
+            <span style="color: var(--text-2);">${escHtml(item.description || 'N/A')}</span>
+            
+            <span style="color: var(--text-3); font-weight: 600;">Nhóm cấu trúc đích:</span>
+            <span style="color: var(--text-2); font-family: 'JetBrains Mono', monospace; font-size: 0.78rem;">${escHtml(item.riskGroups || 'N/A')} ${item.riskGroupsFormula ? `(${escHtml(item.riskGroupsFormula)})` : ''}</span>
+            
+            <span style="color: var(--text-3); font-weight: 600;">Nhóm tá dược rủi ro:</span>
+            <span style="color: var(--text-1); font-weight: 500;">${escHtml(item.riskExcipientType || 'N/A')}</span>
+          </div>
+          
+          ${item.riskExcipientNames && item.riskExcipientNames.length ? `
+            <div style="margin-top: 0.5rem;">
+              <span style="color: var(--text-3); font-weight: 600; font-size: 0.82rem; display: block; margin-bottom: 0.4rem;">Danh sách tá dược rủi ro cụ thể:</span>
+              <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                ${item.riskExcipientNames.map(name => `
+                  <span style="background: rgba(245,158,11,0.1); border: 1px solid rgba(245,158,11,0.2); color: var(--amber); padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 500;">
+                    ${escHtml(name)}
+                  </span>
+                `).join('')}
+              </div>
+            </div>
+          ` : ''}
+        </div>
+      </div>
+    `;
+  });
+  html += `</div>`;
+  
+  html += `<div style="margin-top:1.5rem;font-size:0.75rem;color:var(--text-3);text-align:right">Nguồn dữ liệu dự đoán: <a href="${escHtml(data.sourceUrl)}" target="_blank" style="color:var(--cyan);text-decoration:underline">PharmDE Database</a></div>`;
+
+  setInner('sec-compatibility-results', html);
+}
+
+function renderCompatibilityError(msg) {
+  setInner('sec-compatibility-results', `
+    <div class="empty-state" style="padding: 3rem 2rem; border: 1px dashed rgba(239,68,68,0.3); background: rgba(239,68,68,0.03); border-radius: var(--r-lg)">
+      <div class="empty-state-icon" style="color:var(--red)">❌</div>
+      <div class="empty-state-title" style="color:var(--red)">Lỗi phân tích tương tác tá dược</div>
+      <div class="empty-state-sub">${escHtml(msg)}</div>
+    </div>
+  `);
 }
 
 // ── Keyboard shortcut ─────────────────────────────────────────────────────────

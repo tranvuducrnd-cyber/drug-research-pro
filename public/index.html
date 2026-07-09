@@ -97,6 +97,9 @@
         <button class="tab-btn" role="tab" onclick="switchTab('tab-pharma', this)" id="tab-pharma-btn">
           📖 Dược điển
         </button>
+        <button class="tab-btn" role="tab" onclick="switchTab('tab-compatibility', this)">
+          🤝 Tương tác tá dược
+        </button>
       </div>
 
       <!-- ══ Tab 1: Drug Properties ═══════════════════════════════════ -->
@@ -305,6 +308,25 @@
         </div>
 
       </div><!-- /tab-pharma -->
+      
+      <!-- ══ Tab 6: Compatibility ═══════════════════════════════════════ -->
+      <div id="tab-compatibility" class="tab-panel">
+        <div class="section-card">
+          <div class="section-header">
+            <div class="section-icon icon-purple">🤝</div>
+            <div class="section-title">Phân tích Tương tác Dược chất - Tá dược (PharmDE)</div>
+            <div class="section-subtitle" id="compatibility-smiles-info"></div>
+          </div>
+          <div class="section-body">
+            <div id="sec-compatibility-results">
+              <div class="empty-state" style="padding:2rem">
+                <div class="empty-state-icon">🤝</div>
+                <div class="empty-state-sub">Vui lòng nhập tên hoạt chất và bấm Tra cứu để phân tích tương tác</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
 
     </div><!-- /results-section -->
   </main>
