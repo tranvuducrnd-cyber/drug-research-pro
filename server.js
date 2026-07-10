@@ -233,8 +233,9 @@ async function fetchText(url, title = '') {
       }
     }
 
+    const isPatentOrVidal = url.includes('patents.google.com') || url.includes('vidal.ru');
     const res = await axios.get(url, {
-      timeout: 12000,
+      timeout: isPatentOrVidal ? 3000 : 10000,
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120' },
     });
     
@@ -884,8 +885,8 @@ app.post('/api/sra-formulas', async (req, res) => {
     updateProgress(searchId, 'vidal', 10, 'Đang truy vấn công thức trên Vidal.ru...');
     const searchUrl = `https://www.vidal.ru/search?q=${encodeURIComponent(drugName)}`;
     const searchRes = await axios.get(searchUrl, {
-      headers: { 'User-Agent': 'Mozilla/5.0' },
-      timeout: 10000
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+      timeout: 15000
     });
     
     const $ = cheerio.load(searchRes.data);
@@ -902,24 +903,25 @@ app.post('/api/sra-formulas', async (req, res) => {
       return res.json({ products: [], totalProducts: 0, dataSource: 'Vidal.ru (Nga)' });
     }
 
-    // 2. Lấy dữ liệu chi tiết (tất cả sản phẩm) với concurrency limit
+    // 2. Lấy dữ liệu chi tiết (tối đa 15 sản phẩm đầu tiên để tránh quá tải/timeout)
+    const targetLinks = links.slice(0, 15);
     const productData = [];
-    const chunkSize = 15; // Tăng lên 15 request cùng lúc để cào tất cả sản phẩm nhanh hơn
+    const chunkSize = 15;
     const chunks = [];
-    for (let i = 0; i < links.length; i += chunkSize) {
-      chunks.push(links.slice(i, i + chunkSize));
+    for (let i = 0; i < targetLinks.length; i += chunkSize) {
+      chunks.push(targetLinks.slice(i, i + chunkSize));
     }
 
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       const processedCount = i * chunkSize;
-      updateProgress(searchId, 'vidal', 20 + Math.round((processedCount / links.length) * 60), `Đang tải chi tiết sản phẩm: ${processedCount}/${links.length}...`);
+      updateProgress(searchId, 'vidal', 20 + Math.round((processedCount / targetLinks.length) * 60), `Đang tải chi tiết sản phẩm: ${processedCount}/${targetLinks.length}...`);
       
       await Promise.all(chunk.map(async (link) => {
         try {
           const detailRes = await axios.get(link.url, {
-            headers: { 'User-Agent': 'Mozilla/5.0' },
-            timeout: 10000
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+            timeout: 15000
           });
           const $d = cheerio.load(detailRes.data);
           let composition = '';
@@ -955,9 +957,8 @@ app.post('/api/sra-formulas', async (req, res) => {
    - TÁCH BIỆT RÕ RÀNG: Tuyệt đối không để lẫn hàm lượng/số lượng bên trong trường "name" (tên tá dược). Tên tá dược phải sạch (ví dụ: "lactose monohydrat"), còn hàm lượng phải được đưa riêng vào trường "amount" (ví dụ: "100 mg" hoặc "vừa đủ").
 4. TỔNG HỢP & ĐỀ XUẤT:
    - "commonExcipients": Liệt kê các tá dược được dùng phổ biến nhất trong các công thức trên.
-   - "formulationInsights": Viết một đoạn văn ngắn gọn đề xuất một công thức tối ưu nhất dựa trên dữ liệu thu thập được.
-5. YÊU CẦU BẮT BUỘC (CRITICAL): BẠN PHẢI TRẢ VỀ TOÀN BỘ TẤT CẢ CÁC SẢN PHẨM KHỚP VỚI DẠNG BÀO CHẾ. TUYỆT ĐỐI KHÔNG ĐƯỢC LƯỢC BỎ, RÚT GỌN, HAY CHỈ LẤY VÍ DỤ! NẾU CÓ 50 SẢN PHẨM KHỚP, BẠN PHẢI TRẢ VỀ ĐỦ 50 SẢN PHẨM TRONG MẢNG "products".
-6. TUYỆT ĐỐI KHÔNG BỊA ĐẶT HOẶC SUY LUẬN.
+5. YÊU CẦU BẮT BUỘC (CRITICAL): BẠN PHẢI TRẢ VỀ TOÀN BỘ TẤT CẢ CÁC SẢN PHẨM KHỚP VỚI DẠNG BÀO CHẾ. TUYỆT ĐỐI KHÔNG ĐƯỢC LƯỢC BỎ, RÚT GỌN, HAY CHỈ LẤY VÍ DỤ! NẾU CÓ 50 SẢN PHẨM KHỚP, BẠN PHẢI TRẢ VỀ ĐỦ 50 SẢN PHẨM.
+6. ĐỀ XUẤT QUY TRÌNH: Đề xuất quy trình bào chế phù hợp.
 7. TRẢ VỀ JSON hợp lệ KHÔNG dùng markdown.
 Cấu trúc JSON:
 {
@@ -976,7 +977,7 @@ Cấu trúc JSON:
           "role": "Vai trò của tá dược (ví dụ: Tá dược độn, tá dược dính khô)"
         }
       ],
-      "manufacturingProcess": "Đề xuất quy trình bào chế chi tiết từng bước (step-by-step: Bước 1: ..., Bước 2: ..., Bước 3: ...), phù hợp với dạng bào chế và các tá dược có trong công thức. Nêu rõ lý do lựa chọn phương pháp bào chế (ví dụ: dập thẳng, xát hạt ướt, nhũ hóa...) dựa trên tính chất các tá dược có sẵn.",
+      "manufacturingProcess": "Đề xuất quy trình bào chế chi tiết từng bước.",
       "route": "Đường dùng",
       "source": "Vidal.ru",
       "sourceUrl": "URL gốc"
@@ -998,6 +999,7 @@ Cấu trúc JSON:
     } catch {
       console.error('Lỗi parse JSON từ AI');
     }
+        content: `Đọc và phân tích CHUYÊN SÂU các patent của "${drugName}" ĐẶC BIỆT CHỈ LỌC DẠNG BÀO CHẾ: "${normalized.en}" (hoặc "${normalized.vi}"):\n\n${docs.map((p, i) => `[Patent ${i + 1}]\nTiêu đề: ${p.title}\nURL: ${p.url}\nNội dung: ${p.body.slice(0, 20000)}`).join('\n\n---\n\n')}\n\nJSON:`
 
     updateProgress(searchId, 'vidal', 100, 'Hoàn thành.');
     res.json({
@@ -1041,21 +1043,23 @@ app.post('/api/patents', async (req, res) => {
     const unique = organic.filter((r) => { if (seen.has(r.link)) return false; seen.add(r.link); return true; });
 
     const docs = [];
-    const targetPatents = unique.slice(0, 15);
-    for (let i = 0; i < targetPatents.length; i++) {
-      const p = targetPatents[i];
-      updateProgress(searchId, 'patents', 30 + Math.round((i / targetPatents.length) * 50), `Đang tải nội dung bằng sáng chế: ${i}/${targetPatents.length}...`);
-      await delay(200);
-      const body = await fetchText(p.link);
-      docs.push({ title: p.title, url: p.link, snippet: p.snippet, body: body || '' });
-    }
+    const targetPatents = unique.slice(0, 10);
+    updateProgress(searchId, 'patents', 30, 'Đang tải nội dung các bằng sáng chế song song...');
+    await Promise.all(targetPatents.map(async (p) => {
+      try {
+        const body = await fetchText(p.link);
+        docs.push({ title: p.title, url: p.link, snippet: p.snippet, body: body || '' });
+      } catch (e) {
+        docs.push({ title: p.title, url: p.link, snippet: p.snippet, body: '' });
+      }
+    }));
 
     updateProgress(searchId, 'patents', 80, 'Đang gửi dữ liệu bằng sáng chế tới OpenAI để phân tích...');
     const text = await callOpenAI(openaiKey, [
-      { role: 'system', content: 'Bạn là chuyên gia phân tích patent dược phẩm.\nNhiệm vụ:\n0. LỌC NGHIÊM NGẶT: Chỉ trích xuất các patent có nội dung CHÍNH xác với dạng bào chế được yêu cầu. NẾU BÀI BÁO NÓI VỀ DẠNG BÀO CHẾ KHÁC (VD: Yêu cầu Capsule nhưng patent là Tablet), BỎ QUA NGAY LẬP TỨC.\n1. TÓM TẮT CHUYÊN SÂU CÁC VÍ DỤ (EXAMPLES): Phải đọc sâu vào phần Examples của patent để lấy ra các thông số thử nghiệm cụ thể.\n2. LÝ DO CHỌN CÔNG THỨC: Phân tích thật kỹ tiêu chí/phương pháp đánh giá (độ hòa tan, độ cứng, độ ổn định...) dẫn đến việc tác giả chọn công thức ưu việt nhất.\n3. TRÍCH XUẤT CÔNG THỨC TỐI ƯU NHẤT (Preferred Embodiment) dưới dạng danh sách (bullet points) kèm hàm lượng/tỷ lệ cụ thể.\n4. Trích xuất QUY TRÌNH BÀO CHẾ chi tiết từng bước (step-by-step), bao gồm các thông số kỹ thuật (nhiệt độ, thời gian...).\n5. Ghi rõ số patent và URL. TUYỆT ĐỐI KHÔNG BỊA ĐẶT HOẶC SUY LUẬN. TẤT CẢ thông tin đưa ra mà có trích dẫn nguồn thì BẮT BUỘC thông tin đó phải có xuất xứ CHÍNH XÁC từ nguồn đó.\n6. Trả lời bằng tiếng Việt. JSON hợp lệ KHÔNG có markdown.' },
+      { role: 'system', content: `Bạn là chuyên gia phân tích patent dược phẩm.\nNhiệm vụ:\n0. LỌC NGHIÊM NGẶT: Chỉ trích xuất các patent có nội dung CHÍNH xác với dạng bào chế được yêu cầu. Dạng bào chế được yêu cầu là: Tiếng Việt: "${normalized.vi}" (tương đương tiếng Anh: "${normalized.en}"). NẾU PATENT NÓI VỀ DẠNG BÀO CHẾ KHÁC, BỎ QUA NGAY LẬP TỨC.\n1. TÓM TẮT CHUYÊN SÂU CÁC VÍ DỤ (EXAMPLES): Phải đọc sâu vào phần Examples của patent để lấy ra các thông số thử nghiệm cụ thể.\n2. LÝ DO CHỌN CÔNG THỨC: Phân tích thật kỹ tiêu chí/phương pháp đánh giá (độ hòa tan, độ cứng, độ ổn định...) dẫn đến việc tác giả chọn công thức ưu việt nhất.\n3. TRÍCH XUẤT CÔNG THỨC TỐI ƯU NHẤT (Preferred Embodiment) dưới dạng danh sách (bullet points) kèm hàm lượng/tỷ lệ cụ thể.\n4. Trích xuất QUY TRÌNH BÀO CHẾ chi tiết từng bước (step-by-step), bao gồm các thông số kỹ thuật (nhiệt độ, thời gian...).\n5. Ghi rõ số patent và URL. TUYỆT ĐỐI KHÔNG BỊA ĐẶT HOẶC SUY LUẬN. TẤT CẢ thông tin đưa ra mà có trích dẫn nguồn thì BẮT BUỘC thông tin đó phải có xuất xứ CHÍNH XÁC từ nguồn đó.\n6. Trả lời bằng tiếng Việt. JSON hợp lệ KHÔNG có markdown.` },
       {
         role: 'user',
-        content: `Đọc và phân tích CHUYÊN SÂU các patent của "${drugName}"${dosageForm ? ` ĐẶC BIỆT CHỈ LỌC DẠNG BÀO CHẾ: "${dosageForm}"` : ''}:\n\n${docs.map((p, i) => `[Patent ${i + 1}]\nTiêu đề: ${p.title}\nURL: ${p.url}\nNội dung: ${p.body.slice(0, 20000)}`).join('\n\n---\n\n')}\n\nJSON:
+        content: `Đọc và phân tích CHUYÊN SÂU các patent của "${drugName}" ĐẶC BIỆT CHỈ LỌC DẠNG BÀO CHẾ: "${normalized.en}" (hoặc "${normalized.vi}"):\n\n${docs.map((p, i) => `[Patent ${i + 1}]\nTiêu đề: ${p.title}\nURL: ${p.url}\nNội dung: ${p.body.slice(0, 20000)}`).join('\n\n---\n\n')}\n\nJSON:
 {
   "patents": [{
     "patentNumber": "US/EP/WO số...",
@@ -1175,10 +1179,23 @@ app.post('/api/compatibility', async (req, res) => {
   if (!targetSmiles) {
     try {
       updateProgress(searchId, 'compatibility', 30, 'Đang tìm kiếm cấu trúc SMILES của hoạt chất trên PubChem...');
-      const pcRes = await axios.get(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/${encodeURIComponent(drugName)}/property/CanonicalSMILES/JSON`, { timeout: 10000 });
+      const pcRes = await axios.get(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/${encodeURIComponent(drugName)}/property/CanonicalSMILES,IsomericSMILES/JSON`, { timeout: 15000 });
       const prop = pcRes.data?.PropertyTable?.Properties?.[0];
       if (prop) {
-        targetSmiles = prop.CanonicalSMILES || prop.ConnectivitySMILES || prop.IsomericSMILES;
+        targetSmiles = prop.CanonicalSMILES || prop.IsomericSMILES;
+      }
+      // Fallback: thử tìm CID trước rồi lấy SMILES
+      if (!targetSmiles) {
+        try {
+          const cidRes = await axios.get(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/${encodeURIComponent(drugName)}/cids/JSON`, { timeout: 10000 });
+          const cid = cidRes.data?.IdentifierList?.CID?.[0];
+          if (cid) {
+            const smiRes = await axios.get(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/${cid}/property/CanonicalSMILES/JSON`, { timeout: 10000 });
+            targetSmiles = smiRes.data?.PropertyTable?.Properties?.[0]?.CanonicalSMILES;
+          }
+        } catch (e2) {
+          console.error('[Compatibility] PubChem CID fallback error:', e2.message);
+        }
       }
     } catch (e) {
       console.error('[Compatibility] PubChem SMILES error:', e.message);
