@@ -375,6 +375,59 @@ app.get('/api/image/:chemblId', async (req, res) => {
   res.status(404).send('Image not available');
 });
 
+// ── Route: Validate Drug Name ─────────────────────────────────────────────────
+
+app.post('/api/validate-drug', async (req, res) => {
+  const { drugName } = req.body;
+  if (!drugName) return res.status(400).json({ valid: false, error: 'Thiếu tên hoạt chất' });
+
+  try {
+    // 1. Kiểm tra chính xác trên PubChem
+    const exactRes = await axios.get(
+      `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/${encodeURIComponent(drugName)}/cids/JSON`,
+      { timeout: 8000 }
+    ).catch(() => null);
+
+    if (exactRes && exactRes.data?.IdentifierList?.CID?.length > 0) {
+      return res.json({ valid: true, cid: exactRes.data.IdentifierList.CID[0] });
+    }
+
+    // 2. Nếu không tìm thấy chính xác, tìm gợi ý bằng PubChem Autocomplete
+    const suggestions = [];
+    try {
+      const autoRes = await axios.get(
+        `https://pubchem.ncbi.nlm.nih.gov/rest/autocomplete/compound/${encodeURIComponent(drugName)}/JSON`,
+        { timeout: 8000, params: { limit: 8 } }
+      );
+      const items = autoRes.data?.dictionary_terms?.compound || [];
+      suggestions.push(...items);
+    } catch (e) {
+      console.error('[Validate] Autocomplete error:', e.message);
+    }
+
+    // 3. Fallback: Thử tìm trên ChEMBL
+    try {
+      const chemblRes = await axios.get(
+        `https://www.ebi.ac.uk/chembl/api/data/molecule/search.json?q=${encodeURIComponent(drugName)}&limit=5`,
+        { timeout: 8000, headers: { Accept: 'application/json' } }
+      );
+      const mols = chemblRes.data?.molecules || [];
+      for (const m of mols) {
+        const name = m.pref_name || m.molecule_chembl_id;
+        if (name && !suggestions.includes(name)) suggestions.push(name);
+      }
+    } catch (e) {
+      console.error('[Validate] ChEMBL fallback error:', e.message);
+    }
+
+    return res.json({ valid: false, suggestions: suggestions.slice(0, 8) });
+  } catch (err) {
+    // Nếu tất cả API đều lỗi, cho phép tiếp tục (không chặn user)
+    console.error('[Validate] Error:', err.message);
+    return res.json({ valid: true, warning: 'Không thể xác minh tên hoạt chất, tiếp tục tìm kiếm.' });
+  }
+});
+
 // ── Route: ChEMBL Properties ──────────────────────────────────────────────────
 
 app.post('/api/properties', async (req, res) => {
@@ -413,7 +466,7 @@ app.post('/api/properties', async (req, res) => {
     updateProgress(searchId, 'properties', 100, 'Đã hoàn thành tra cứu ChEMBL.');
     res.json({
       chemblId,
-      // Dùng endpoint proxy nội bộ thay vì URL ChEMBL trực tiếp (tránh CORS)
+      smiles,
       imageUrl: `/api/image/${chemblId}?smiles=${encodeURIComponent(smiles)}`,
       prefName: mol.pref_name || drugName,
       moleculeType: mol.molecule_type,
@@ -999,8 +1052,6 @@ Cấu trúc JSON:
     } catch {
       console.error('Lỗi parse JSON từ AI');
     }
-        content: `Đọc và phân tích CHUYÊN SÂU các patent của "${drugName}" ĐẶC BIỆT CHỈ LỌC DẠNG BÀO CHẾ: "${normalized.en}" (hoặc "${normalized.vi}"):\n\n${docs.map((p, i) => `[Patent ${i + 1}]\nTiêu đề: ${p.title}\nURL: ${p.url}\nNội dung: ${p.body.slice(0, 20000)}`).join('\n\n---\n\n')}\n\nJSON:`
-
     updateProgress(searchId, 'vidal', 100, 'Hoàn thành.');
     res.json({
       products: parsed.products || [],

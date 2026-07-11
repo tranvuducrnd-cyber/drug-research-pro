@@ -232,6 +232,85 @@ async function api(endpoint, body) {
   return data;
 }
 
+// ── Drug Name Suggestion Modal ────────────────────────────────────────────────
+
+function showDrugSuggestionModal(originalName, suggestions) {
+  return new Promise((resolve) => {
+    // Tạo overlay
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:10000;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);';
+
+    const modal = document.createElement('div');
+    modal.style.cssText = 'background:var(--bg-2,#1a1a2e);border:1px solid var(--border,#333);border-radius:16px;padding:2rem;max-width:480px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.5);';
+
+    let html = `
+      <div style="text-align:center;margin-bottom:1.5rem;">
+        <div style="font-size:2.5rem;margin-bottom:0.5rem;">⚠️</div>
+        <h3 style="color:var(--text-1,#fff);margin:0 0 0.5rem 0;font-size:1.2rem;">Không tìm thấy hoạt chất</h3>
+        <p style="color:var(--text-3,#888);font-size:0.9rem;margin:0;">
+          Không tìm thấy <strong style="color:var(--red,#ff6b6b);">"${originalName}"</strong> trên PubChem/ChEMBL.<br>
+          Có phải bạn muốn tìm:
+        </p>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:0.5rem;max-height:300px;overflow-y:auto;margin-bottom:1.5rem;">
+    `;
+
+    suggestions.forEach((s) => {
+      html += `<button class="suggestion-btn" data-name="${s}" style="
+        padding:0.75rem 1rem;border:1px solid var(--border,#333);border-radius:10px;
+        background:var(--bg-3,#252540);color:var(--text-1,#fff);cursor:pointer;
+        text-align:left;font-size:0.95rem;transition:all 0.2s ease;
+      " onmouseover="this.style.background='var(--blue,#4361ee)';this.style.borderColor='var(--blue,#4361ee)';"
+         onmouseout="this.style.background='var(--bg-3,#252540)';this.style.borderColor='var(--border,#333)';">
+        💊 ${s}
+      </button>`;
+    });
+
+    html += `</div>
+      <div style="display:flex;gap:0.75rem;">
+        <button id="modal-continue" style="
+          flex:1;padding:0.7rem;border:1px solid var(--border,#333);border-radius:10px;
+          background:transparent;color:var(--text-2,#aaa);cursor:pointer;font-size:0.85rem;
+        ">Tiếp tục với "${originalName}"</button>
+        <button id="modal-cancel" style="
+          flex:1;padding:0.7rem;border:none;border-radius:10px;
+          background:var(--red,#ff6b6b);color:#fff;cursor:pointer;font-size:0.85rem;font-weight:600;
+        ">Hủy bỏ</button>
+      </div>
+    `;
+
+    modal.innerHTML = html;
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    // Gắn event cho các nút gợi ý
+    modal.querySelectorAll('.suggestion-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.body.removeChild(overlay);
+        resolve(btn.dataset.name);
+      });
+    });
+
+    modal.querySelector('#modal-continue').addEventListener('click', () => {
+      document.body.removeChild(overlay);
+      resolve(originalName); // Tiếp tục với tên gốc
+    });
+
+    modal.querySelector('#modal-cancel').addEventListener('click', () => {
+      document.body.removeChild(overlay);
+      resolve(null); // Hủy tìm kiếm
+    });
+
+    // Nhấn ngoài modal để hủy
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) {
+        document.body.removeChild(overlay);
+        resolve(null);
+      }
+    });
+  });
+}
+
 // ── Main Search ───────────────────────────────────────────────────────────────
 
 async function startSearch() {
@@ -244,6 +323,48 @@ async function startSearch() {
 
   if (!drugName) { alert('Vui lòng nhập tên hoạt chất!'); return; }
   if (!dosageForm) { alert('Vui lòng chọn Dạng bào chế!'); return; }
+
+  // ── Kiểm tra tên hoạt chất trước khi tìm kiếm ──
+  const btnSearch = document.getElementById('btn-search');
+  btnSearch.disabled = true;
+  btnSearch.textContent = '🔍 Đang kiểm tra tên hoạt chất...';
+  try {
+    const validateRes = await fetch('/api/validate-drug', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ drugName })
+    });
+    const validateData = await validateRes.json();
+
+    if (!validateData.valid && validateData.suggestions && validateData.suggestions.length > 0) {
+      btnSearch.disabled = false;
+      btnSearch.textContent = '🔬 Bắt đầu nghiên cứu';
+      // Hiển thị modal gợi ý
+      const picked = await showDrugSuggestionModal(drugName, validateData.suggestions);
+      if (picked === null) return; // User nhấn Hủy
+      if (picked !== drugName) {
+        document.getElementById('drug-name').value = picked;
+        startSearch(); // Gọi lại với tên đã sửa
+        return;
+      }
+      // Nếu user chọn "Tiếp tục với tên gốc", tiếp tục bình thường
+    } else if (!validateData.valid && (!validateData.suggestions || validateData.suggestions.length === 0)) {
+      // Không tìm thấy và cũng không có gợi ý
+      const continueAnyway = confirm(
+        `⚠️ Không tìm thấy hoạt chất "${drugName}" trên cơ sở dữ liệu PubChem/ChEMBL.\n\n` +
+        `Có thể bạn đã nhập sai tên. Bạn có muốn tiếp tục tìm kiếm không?`
+      );
+      if (!continueAnyway) {
+        btnSearch.disabled = false;
+        btnSearch.textContent = '🔬 Bắt đầu nghiên cứu';
+        return;
+      }
+    }
+  } catch (e) {
+    console.warn('Drug validation skipped:', e.message);
+  }
+  btnSearch.disabled = false;
+  btnSearch.textContent = '🔬 Bắt đầu nghiên cứu';
 
   const searchId = 'search_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
 
@@ -397,13 +518,18 @@ async function startSearch() {
   };
   promises.push(runPharma());
 
-  // Thread F: Compatibility (PharmDE)
+  // Thread F: Compatibility (PharmDE) — chờ ChEMBL hoàn thành để lấy SMILES
   const runCompatibility = async () => {
+    // Chờ ChEMBL data có sẵn (runGroupA đã push vào promises[0])
+    await promises[0]; 
     setStepStatus('step-compatibility', 'active');
     try {
       let smiles = '';
-      if (state.pubchemData && state.pubchemData.properties) {
-        smiles = state.pubchemData.properties.CanonicalSMILES || '';
+      if (state.pubchemData) {
+        // Ưu tiên lấy SMILES từ nhiều nguồn
+        smiles = (state.pubchemData.properties && state.pubchemData.properties.CanonicalSMILES)
+          || state.pubchemData.smiles
+          || '';
       }
       state.compatibilityData = await api('/api/compatibility', { drugName, smiles, searchId });
       setStepStatus('step-compatibility', 'done', `Đã tìm thấy ${state.compatibilityData.total || 0} tương tác`);
