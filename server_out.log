@@ -315,3 +315,77 @@
 [REQUEST] GET /api/progress?id=search_1784732400401_786
 [REQUEST] GET /api/progress?id=search_1784732400401_786
 [REQUEST] GET /api/progress?id=search_1784732400401_786
+[REQUEST] POST /api/validate-drug - body: {"drugName":"ibuprofen"}
+[REQUEST] POST /api/properties - body: {"drugName":"ibuprofen","searchId":"search_1784733039388_435"}
+[REQUEST] POST /api/forced-degradation - body: {"drugName":"ibuprofen","openaiKey":"","serperKey":"","searchId":"search_1784733039388_435"}
+[REQUEST] POST /api/sra-formulas - body: {"drugName":"ibuprofen","dosageForm":"Tablet","openaiKey":"","searchId":"search_1784733039388_435"}
+[REQUEST] POST /api/patents - body: {"drugName":"ibuprofen","dosageForm":"Tablet","openaiKey":"","serperKey":"","searchId":"search_1784733039388_435"}
+[REQUEST] POST /api/pharmacopoeia/search - body: {"drugName":"ibuprofen","searchId":"search_1784733039388_435"}
+[Pharmacopoeia] Fetching data from webofpharma.com...
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] POST /api/ai-analysis - body: {"drugName":"ibuprofen","drugData":{"chemblId":"CHEMBL521","smiles":"CC(C)Cc1ccc(C(C)C(=O)O)cc1","imageUrl":"/api/image/CHEMBL521?smiles=CC(C)Cc1ccc(C(C)C(%3DO)O)cc1","prefName":"IBUPROFEN","moleculeType":"Small molecule","maxPhase":"4.0","properties":{"MolecularFormula":"C13H18O2","MolecularWeight"
+[REQUEST] POST /api/compatibility - body: {"drugName":"ibuprofen","smiles":"CC(C)Cc1ccc(C(C)C(=O)O)cc1","searchId":"search_1784733039388_435"}
+[Pharmacopoeia] Loaded 15678 entries from Web.
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[patents] nguồn: direct=0 wipo=20 serper=90
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
+[REQUEST] GET /api/progress?id=search_1784733039388_435
